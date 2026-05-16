@@ -11,6 +11,10 @@ an explicit `--settings` file that points `sysRoot` at a test directory.
 plugin that owns its kind, even if the object represents something that also
 matters during bootstrap.
 
+Before `gw update` writes files or runs commands, it validates every selected
+ConfigObject and prints all collected errors. No selected object is applied if
+any selected object is invalid.
+
 ## Initial Plugins
 
 - `system.mirror` owns Debian apt sources and the Docker CE apt source.
@@ -31,6 +35,9 @@ The registry also keeps a placeholder for event hooks. Later, commands like
 ConfigObjects are YAML documents under configured directories. Later
 directories override earlier directories for the same `kind/name`.
 
+A single YAML file may contain multiple ConfigObject documents separated by
+`---`.
+
 The bootstrap singleton objects currently used are:
 
 - `SystemNetworkConfig`, recommended name `system`
@@ -44,6 +51,8 @@ The bootstrap singleton objects currently used are:
 
 Detailed ConfigObject references:
 
+- `docs/config-objects/DevGroup.md`
+- `docs/config-objects/Interface.md`
 - `docs/config-objects/SystemNetworkConfig.md`
 - `docs/config-objects/SystemMirrorConfig.md`
 

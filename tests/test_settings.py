@@ -21,3 +21,18 @@ web:
     assert settings.sys_root == Path("/tmp/sysroot")
     assert settings.web.host == "0.0.0.0"
     assert settings.web.port == 8765
+
+
+def test_load_settings_reads_web_auth_database_path(tmp_path: Path) -> None:
+    settings_file = tmp_path / "settings.yaml"
+    auth_db = tmp_path / "auth.sqlite3"
+    settings_file.write_text(
+        f"""
+web:
+  authDb: {auth_db}
+""".strip()
+    )
+
+    settings = load_settings(settings_file)
+
+    assert settings.web.auth_db == auth_db

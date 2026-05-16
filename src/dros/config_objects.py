@@ -2,10 +2,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TypeVar
+from typing import Literal, TypeVar
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field
 
 from dros.settings import DrosSettings
 
@@ -29,6 +29,36 @@ class SystemMirrorConfig(BaseModel):
         alias="dockerAptMirror",
     )
     docker_registry_mirror: str = Field("", alias="dockerRegistryMirror")
+
+
+class DevGroupConfig(BaseModel):
+    model_config = ConfigDict(extra="ignore", populate_by_name=True)
+
+    id: int
+
+
+class InterfaceConfig(BaseModel):
+    model_config = ConfigDict(extra="ignore", populate_by_name=True)
+
+    type: Literal["eth", "bridge", "vlan"]
+    dhcp: bool = False
+    address: str | None = None
+    gateway: str | None = None
+    extra_addresses: list[str] = Field(
+        default_factory=list,
+        validation_alias=AliasChoices("extra_addresses", "extraAddresses"),
+    )
+    devgroup: str | None = Field(
+        None,
+        validation_alias=AliasChoices("devgroup", "devGroup"),
+    )
+    ports: list[str] = Field(default_factory=list)
+    vlan_aware: bool = Field(
+        False,
+        validation_alias=AliasChoices("vlan_aware", "vlanAware"),
+    )
+    parent: str | None = None
+    id: int | None = None
 
 
 @dataclass(frozen=True)
@@ -77,6 +107,12 @@ class ConfigStore:
             obj = self._unique_object_for_kind(kind)
         data = obj.spec if obj is not None else {}
         return model_type.model_validate(data)
+
+    def resolve_object(self, obj: ConfigObject, model_type: type[ModelT]) -> ModelT:
+        return model_type.model_validate(obj.spec)
+
+    def by_kind(self, kind: str) -> list[ConfigObject]:
+        return [obj for key, obj in self._objects.items() if key.kind == kind]
 
     def objects(self) -> list[ConfigObject]:
         return list(self._objects.values())

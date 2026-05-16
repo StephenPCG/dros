@@ -5,6 +5,8 @@ from pathlib import Path
 from dros.cli import main as cli_main
 from dros.cli.main import _extract_settings_path, _strip_global_options
 from dros.settings import DrosSettings
+from dros.update import UpdateValidationError
+from dros.web.auth import WebAuthStore
 
 
 def test_extract_settings_path_supports_separate_and_equals_forms() -> None:
@@ -71,3 +73,145 @@ def test_config_create_prints_config_object_example(capsys) -> None:
     assert "kind: SystemNetworkConfig" in output
     assert "name: system" in output
     assert "domain: lan" in output
+
+
+def test_config_create_accepts_kind_alias(capsys) -> None:
+    assert cli_main.main(["config", "create", "iface"]) == 0
+
+    output = capsys.readouterr().out
+    assert "kind: Interface" in output
+    assert "type: bridge" in output
+
+
+def test_update_command_loads_settings_and_runs_update(monkeypatch, tmp_path: Path) -> None:
+    settings_file = tmp_path / "settings.yaml"
+    settings_file.write_text(
+        f"""
+sysRoot: {tmp_path / "sysroot"}
+paths:
+  configs: {tmp_path / "configs"}
+""".lstrip(),
+        encoding="utf-8",
+    )
+    calls: list[tuple[DrosSettings, str | None, int]] = []
+
+    def fake_ensure_bootstrap_privileges(settings: DrosSettings) -> None:
+        assert settings.sys_root == tmp_path / "sysroot"
+
+    def fake_run_update(
+        settings: DrosSettings,
+        *,
+        target: str | None,
+        verbose: int,
+        console: object,
+    ) -> None:
+        calls.append((settings, target, verbose))
+
+    monkeypatch.setattr(cli_main, "_ensure_bootstrap_privileges", fake_ensure_bootstrap_privileges)
+    monkeypatch.setattr(cli_main, "run_update", fake_run_update)
+
+    assert cli_main.main(["--settings", str(settings_file), "update", "iface/br0"]) == 0
+    assert [(call[0].sys_root, call[1], call[2]) for call in calls] == [
+        (tmp_path / "sysroot", "iface/br0", 1)
+    ]
+
+
+def test_update_command_prints_all_validation_errors(monkeypatch, tmp_path: Path, capsys) -> None:
+    settings_file = tmp_path / "settings.yaml"
+    settings_file.write_text(
+        f"""
+sysRoot: {tmp_path / "sysroot"}
+paths:
+  configs: {tmp_path / "configs"}
+""".lstrip(),
+        encoding="utf-8",
+    )
+
+    def fake_ensure_bootstrap_privileges(settings: DrosSettings) -> None:
+        assert settings.sys_root == tmp_path / "sysroot"
+
+    def fake_run_update(
+        settings: DrosSettings,
+        *,
+        target: str | None,
+        verbose: int,
+        console: object,
+    ) -> None:
+        raise UpdateValidationError(["Interface/a: bad a", "Interface/b: bad b"])
+
+    monkeypatch.setattr(cli_main, "_ensure_bootstrap_privileges", fake_ensure_bootstrap_privileges)
+    monkeypatch.setattr(cli_main, "run_update", fake_run_update)
+
+    assert cli_main.main(["--settings", str(settings_file), "update", "ifaces"]) == 1
+    output = capsys.readouterr().err
+    assert "update validation failed:" in output
+    assert "Interface/a: bad a" in output
+    assert "Interface/b: bad b" in output
+
+
+def test_web_create_user_command_creates_login_account(tmp_path: Path) -> None:
+    settings_file = tmp_path / "settings.yaml"
+    auth_db = tmp_path / "web-auth.sqlite3"
+    settings_file.write_text(
+        f"""
+web:
+  authDb: {auth_db}
+""".lstrip(),
+        encoding="utf-8",
+    )
+
+    assert cli_main.main(
+        ["--settings", str(settings_file), "web", "create-user", "alice", "--password", "secret"]
+    ) == 0
+
+    store = WebAuthStore(auth_db)
+    assert store.verify_password("alice", "secret")
+
+
+def test_web_create_user_prompts_for_password_when_option_missing(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    settings_file = tmp_path / "settings.yaml"
+    auth_db = tmp_path / "web-auth.sqlite3"
+    settings_file.write_text(
+        f"""
+web:
+  authDb: {auth_db}
+""".lstrip(),
+        encoding="utf-8",
+    )
+    prompts: list[str] = []
+    passwords = iter(["secret", "secret"])
+
+    def fake_getpass(prompt: str) -> str:
+        prompts.append(prompt)
+        return next(passwords)
+
+    monkeypatch.setattr(cli_main.getpass, "getpass", fake_getpass)
+
+    assert cli_main.main(["--settings", str(settings_file), "web", "create-user", "alice"]) == 0
+
+    assert prompts == ["Password: ", "Confirm password: "]
+    assert WebAuthStore(auth_db).verify_password("alice", "secret")
+
+
+def test_web_passwd_command_changes_password(tmp_path: Path) -> None:
+    settings_file = tmp_path / "settings.yaml"
+    auth_db = tmp_path / "web-auth.sqlite3"
+    settings_file.write_text(
+        f"""
+web:
+  authDb: {auth_db}
+""".lstrip(),
+        encoding="utf-8",
+    )
+    store = WebAuthStore(auth_db)
+    store.create_user("alice", "secret")
+
+    assert cli_main.main(
+        ["--settings", str(settings_file), "web", "passwd", "alice", "--password", "better"]
+    ) == 0
+
+    assert not store.verify_password("alice", "secret")
+    assert store.verify_password("alice", "better")

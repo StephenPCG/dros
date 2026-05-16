@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass, field
 
-from dros.config_objects import ConfigStore
+from dros.config_objects import ConfigObject, ConfigStore
 from dros.executor import SystemExecutor
 from dros.settings import DrosSettings
 
@@ -20,7 +20,17 @@ class BootstrapContext:
     registry: PluginRegistry
 
 
+@dataclass
+class UpdateContext:
+    settings: DrosSettings
+    configs: ConfigStore
+    executor: SystemExecutor
+    registry: PluginRegistry
+
+
 BootstrapHook = Callable[[BootstrapContext], None]
+ValidationHook = Callable[[UpdateContext, list[ConfigObject]], list[str]]
+UpdateHook = Callable[[UpdateContext, list[ConfigObject]], None]
 
 
 @dataclass(frozen=True)
@@ -31,11 +41,23 @@ class DrosPlugin:
     packages: frozenset[str] = frozenset()
     managed_files: frozenset[str] = frozenset()
     bootstrap_hook: BootstrapHook | None = None
+    validation_hook: ValidationHook | None = None
+    update_hook: UpdateHook | None = None
     event_hooks: frozenset[str] = frozenset()
 
     def bootstrap(self, context: BootstrapContext) -> None:
         if self.bootstrap_hook is not None:
             self.bootstrap_hook(context)
+
+    def validate(self, context: UpdateContext, objects: list[ConfigObject]) -> list[str]:
+        if self.validation_hook is None:
+            return []
+        return self.validation_hook(context, objects)
+
+    def update(self, context: UpdateContext, objects: list[ConfigObject]) -> None:
+        if self.update_hook is None:
+            raise PluginRegistrationError(f"plugin {self.name} does not support update")
+        self.update_hook(context, objects)
 
 
 @dataclass

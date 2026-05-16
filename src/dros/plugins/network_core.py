@@ -1,7 +1,9 @@
 from __future__ import annotations
 
-from dros.config_objects import SystemNetworkConfig
-from dros.plugins.base import BootstrapContext, DrosPlugin
+from pydantic import ValidationError
+
+from dros.config_objects import ConfigObject, SystemNetworkConfig
+from dros.plugins.base import BootstrapContext, DrosPlugin, UpdateContext
 
 PACKAGES = frozenset(
     {
@@ -39,6 +41,8 @@ def create_plugin() -> DrosPlugin:
         packages=PACKAGES,
         managed_files=MANAGED_FILES,
         bootstrap_hook=bootstrap,
+        validation_hook=validate,
+        update_hook=update,
     )
 
 
@@ -67,6 +71,24 @@ def bootstrap(context: BootstrapContext) -> None:
         context.executor.run(["hostname", network.hostname], real_only=True)
     if sysctl_changed:
         context.executor.run(["sysctl", "--system"], real_only=True)
+
+
+def validate(context: UpdateContext, objects: list[ConfigObject]) -> list[str]:
+    errors: list[str] = []
+    for obj in objects:
+        if obj.kind != "SystemNetworkConfig":
+            continue
+        try:
+            context.configs.resolve_object(obj, SystemNetworkConfig)
+        except ValidationError as exc:
+            for error in exc.errors():
+                location = ".".join(str(part) for part in error["loc"])
+                errors.append(f"{obj.kind}/{obj.name}: spec.{location}: {error['msg']}")
+    return errors
+
+
+def update(context: UpdateContext, _objects: object) -> None:
+    bootstrap(context)
 
 
 def _hosts_file(network: SystemNetworkConfig) -> str:

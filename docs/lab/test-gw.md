@@ -18,7 +18,10 @@ ssh test-gw 'cd /opt/dros && ./install-dros.sh --test'
 ```
 
 The sync script uses `rsync --delete` and excludes local virtualenvs, Python
-caches, build outputs, sockets, and runtime state.
+caches, sockets, and runtime state. It deliberately syncs `.git/` and
+`web/dist/`: gateway hosts should consume built Web assets from the source tree,
+not build the frontend locally. Run `npm run build` under `web/` before syncing
+after Web source changes.
 
 `uv` is installed at `/home/stephen/.local/bin/uv` and appears in the login
 shell `PATH`.

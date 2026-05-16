@@ -1,7 +1,9 @@
 from __future__ import annotations
 
-from dros.config_objects import SystemMirrorConfig
-from dros.plugins.base import BootstrapContext, DrosPlugin
+from pydantic import ValidationError
+
+from dros.config_objects import ConfigObject, SystemMirrorConfig
+from dros.plugins.base import BootstrapContext, DrosPlugin, UpdateContext
 
 PACKAGES = frozenset({"ca-certificates", "curl"})
 MANAGED_FILES = frozenset(
@@ -19,6 +21,8 @@ def create_plugin() -> DrosPlugin:
         packages=PACKAGES,
         managed_files=MANAGED_FILES,
         bootstrap_hook=bootstrap,
+        validation_hook=validate,
+        update_hook=update,
     )
 
 
@@ -49,6 +53,24 @@ def bootstrap(context: BootstrapContext) -> None:
         "/etc/apt/sources.list.d/docker-ce.list",
         _docker_source(mirror.docker_apt_mirror, codename, arch),
     )
+
+
+def validate(context: UpdateContext, objects: list[ConfigObject]) -> list[str]:
+    errors: list[str] = []
+    for obj in objects:
+        if obj.kind != "SystemMirrorConfig":
+            continue
+        try:
+            context.configs.resolve_object(obj, SystemMirrorConfig)
+        except ValidationError as exc:
+            for error in exc.errors():
+                location = ".".join(str(part) for part in error["loc"])
+                errors.append(f"{obj.kind}/{obj.name}: spec.{location}: {error['msg']}")
+    return errors
+
+
+def update(context: UpdateContext, _objects: object) -> None:
+    bootstrap(context)
 
 
 def _debian_sources(apt_mirror: str, codename: str) -> str:

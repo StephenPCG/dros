@@ -9,3 +9,4 @@ daemon:
 web:
   host: 127.0.0.1
   port: 8765
+  authDb: /opt/gateway/run/web-auth.sqlite3

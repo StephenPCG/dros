@@ -34,6 +34,7 @@ class WebSettings(BaseModel):
     host: str = "127.0.0.1"
     port: int = 8765
     static_dir: Path | None = Field(None, alias="staticDir")
+    auth_db: Path | None = Field(None, alias="authDb")
 
 
 class DrosSettings(BaseModel):

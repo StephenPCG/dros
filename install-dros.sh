@@ -271,6 +271,7 @@ web:
   host: 0.0.0.0
   port: 8766
   staticDir: $SOURCE_DIR/web/dist
+  authDb: $RUN_DIR/web-auth.sqlite3
 EOF
 else
   write_if_missing "$SETTINGS_PATH" 0644 <<EOF
@@ -286,6 +287,7 @@ web:
   host: 0.0.0.0
   port: $WEB_PORT
   staticDir: $SOURCE_DIR/web/dist
+  authDb: $RUN_DIR/web-auth.sqlite3
 EOF
 fi
 

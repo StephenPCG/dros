@@ -22,8 +22,11 @@ previous rewrite.
 ```sh
 uv sync
 uv run gw help
+uv run gw update iface/br0
 uv run gw restart daemon
 uv run gw restart web
+uv run gw web create-user admin
+uv run gw web passwd admin
 uv run pytest -q
 uv run python -m compileall -q src/dros
 ```
@@ -35,6 +38,10 @@ cd web
 npm install
 npm run build
 ```
+
+Web login users are stored in the SQLite database configured by `web.authDb`.
+When `--password` is omitted, `gw web create-user` and `gw web passwd` prompt
+for the password interactively.
 
 ## Lab Testing
 

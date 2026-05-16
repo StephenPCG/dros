@@ -14,8 +14,11 @@ def test_default_plugins_are_ordered_by_dependencies() -> None:
     assert names.index("system.mirror") < names.index("network.core")
     assert names.index("system.mirror") < names.index("system.utilities")
     assert names.index("system.mirror") < names.index("docker.core")
+    assert names.index("network.core") < names.index("network.interfaces")
     assert registry.plugin_for_kind("SystemNetworkConfig").name == "network.core"
     assert registry.plugin_for_kind("SystemMirrorConfig").name == "system.mirror"
+    assert registry.plugin_for_kind("DevGroup").name == "network.interfaces"
+    assert registry.plugin_for_kind("Interface").name == "network.interfaces"
 
 
 def test_registry_rejects_duplicate_package_owners() -> None:
