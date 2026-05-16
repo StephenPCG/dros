@@ -1,0 +1,11 @@
+sysRoot: /
+paths:
+  configs: /opt/gateway/configs
+  logs: /opt/gateway/logs
+  run: /opt/gateway/run
+  containers: /opt/gateway/containers
+daemon:
+  socketPath: /opt/gateway/run/drosd.sock
+web:
+  host: 127.0.0.1
+  port: 8765
