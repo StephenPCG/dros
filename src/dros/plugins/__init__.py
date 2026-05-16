@@ -3,7 +3,16 @@ from __future__ import annotations
 
 from dros.plugins.base import PluginRegistry
 
-from . import docker_core, network_core, network_interfaces, system_mirror, system_utilities
+from . import (
+    docker_core,
+    ip_lists,
+    network_core,
+    network_firewall,
+    network_interfaces,
+    network_routing,
+    system_mirror,
+    system_utilities,
+)
 
 
 def create_default_registry() -> PluginRegistry:
@@ -11,6 +20,9 @@ def create_default_registry() -> PluginRegistry:
     registry.register(system_mirror.create_plugin())
     registry.register(network_core.create_plugin())
     registry.register(network_interfaces.create_plugin())
+    registry.register(network_routing.create_plugin())
+    registry.register(network_firewall.create_plugin())
+    registry.register(ip_lists.create_plugin())
     registry.register(system_utilities.create_plugin())
     registry.register(docker_core.create_plugin())
     return registry

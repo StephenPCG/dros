@@ -261,6 +261,7 @@ EOF
   write_file "$SETTINGS_PATH" 0644 <<EOF
 sysRoot: $SYS_ROOT
 paths:
+  source: $SOURCE_DIR
   configs: $CONFIGS_DIR
   logs: $LOGS_DIR
   run: $RUN_DIR
@@ -277,6 +278,7 @@ else
   write_if_missing "$SETTINGS_PATH" 0644 <<EOF
 sysRoot: $SYS_ROOT
 paths:
+  source: $SOURCE_DIR
   configs: $CONFIGS_DIR
   logs: $LOGS_DIR
   run: $RUN_DIR

@@ -17,6 +17,7 @@ from dros.cli.privilege import path_writable_for_current_user, reexec_with_sudo
 from dros.cli.services import restart_local_service
 from dros.config_catalog import render_config_object_example
 from dros.events import enqueue_event, process_event
+from dros.ip_lists import load_ip_lists, summarize_ip_lists, update_ip_lists
 from dros.settings import DEFAULT_SETTINGS_PATH, DrosSettings, load_settings
 from dros.update import UpdateValidationError, run_update
 from dros.web.auth import WebAuthStore, resolve_auth_db_path
@@ -36,6 +37,8 @@ config_app = App(name="config", help="ConfigObject helpers.")
 app.command(config_app)
 web_app = App(name="web", help="Web user and session administration.")
 app.command(web_app)
+ip_list_app = App(name="ip-list", help="IP list utilities.")
+app.command(ip_list_app)
 
 
 def _not_ready(command: str) -> None:
@@ -104,6 +107,45 @@ def config_create(kind: str) -> None:
     except ValueError as exc:
         error_console.print(f"[red]config create failed:[/red] {exc}")
         raise SystemExit(1) from exc
+
+
+@ip_list_app.command(name="list")
+def ip_list_list() -> None:
+    """List detected IP lists."""
+    try:
+        settings = _load_cli_settings()
+        summaries = summarize_ip_lists(load_ip_lists(settings))
+    except (OSError, RuntimeError, ValueError) as exc:
+        error_console.print(f"[red]ip-list list failed:[/red] {exc}")
+        raise SystemExit(1) from exc
+
+    if not summaries:
+        console.print("no ip lists found")
+        return
+    for item in summaries:
+        console.print(
+            f"{item.name} v4={item.ipv4_count} v6={item.ipv6_count} "
+            f"mixed={item.mixed_count}"
+        )
+
+
+@ip_list_app.command(name="update")
+def ip_list_update(verbose: int = 1, timeout: float = 30.0) -> None:
+    """Download runtime IP lists."""
+    if verbose not in {0, 1, 2}:
+        error_console.print("[red]ip-list update failed:[/red] --verbose must be 0, 1, or 2")
+        raise SystemExit(2)
+    try:
+        settings = _load_cli_settings()
+        _ensure_path_privileges(settings.paths.run)
+        result = update_ip_lists(settings, verbose=verbose, console=console, timeout=timeout)
+    except (OSError, RuntimeError, ValueError) as exc:
+        error_console.print(f"[red]ip-list update failed:[/red] {exc}")
+        raise SystemExit(1) from exc
+    if result.failures:
+        raise SystemExit(1)
+    if verbose > 0:
+        console.print("[green]ip lists updated[/green]")
 
 
 @web_app.command(name="create-user")
@@ -217,6 +259,13 @@ def _ensure_bootstrap_privileges(settings: DrosSettings) -> None:
     if os.geteuid() == 0:
         return
     if settings.sys_root == Path("/") or not path_writable_for_current_user(settings.sys_root):
+        reexec_with_sudo([sys.executable, "-m", "dros.cli.main", *_current_raw_args])
+
+
+def _ensure_path_privileges(path: Path) -> None:
+    if os.geteuid() == 0:
+        return
+    if not path_writable_for_current_user(path):
         reexec_with_sudo([sys.executable, "-m", "dros.cli.main", *_current_raw_args])
 
 

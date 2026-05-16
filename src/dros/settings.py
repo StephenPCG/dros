@@ -11,6 +11,7 @@ DEFAULT_SETTINGS_PATH = Path("/etc/dros/settings.yaml")
 class DrosPaths(BaseModel):
     model_config = ConfigDict(extra="ignore", populate_by_name=True)
 
+    source: Path = Path("/opt/dros")
     configs: Path | list[Path] = Path("/opt/gateway/configs")
     logs: Path = Path("/opt/gateway/logs")
     run: Path = Path("/opt/gateway/run")

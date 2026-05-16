@@ -82,9 +82,8 @@ spec:
     )
     assert "usage: openvpn-iface start IFACE CONFIG PID UP_SCRIPT CRL_FILE LOG_FILE" in openvpn_helper
     assert "--log-append" in openvpn_helper
-    assert 'include "/etc/dros/nftables.d/*.nft"' in (
-        sysroot / "etc/nftables.conf"
-    ).read_text(encoding="utf-8")
+    assert (sysroot / "etc/dros/nftables.d").is_dir()
+    assert not (sysroot / "etc/nftables.conf").exists()
 
 
 def test_bootstrap_uses_singleton_config_named_system(tmp_path: Path) -> None:

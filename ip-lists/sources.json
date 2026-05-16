@@ -1,0 +1,72 @@
+{
+  "failure_count": 0,
+  "generated_at": 1778407753,
+  "results": [
+    {
+      "ipv4_count": 5881,
+      "ipv6_count": 2627,
+      "name": "amazon",
+      "ok": true,
+      "source": "https://ip-ranges.amazonaws.com/ip-ranges.json"
+    },
+    {
+      "ipv4_count": 4201,
+      "ipv6_count": 1507,
+      "name": "china",
+      "ok": true,
+      "source": "https://raw.githubusercontent.com/gaoyifan/china-operator-ip/ip-lists"
+    },
+    {
+      "ipv4_count": 15,
+      "ipv6_count": 7,
+      "name": "cloudflare",
+      "ok": true,
+      "source": "https://www.cloudflare.com/ips-v4 + https://www.cloudflare.com/ips-v6"
+    },
+    {
+      "ipv4_count": 19,
+      "ipv6_count": 2,
+      "name": "fastly",
+      "ok": true,
+      "source": "https://api.fastly.com/public-ip-list"
+    },
+    {
+      "ipv4_count": 5283,
+      "ipv6_count": 1252,
+      "name": "github",
+      "ok": true,
+      "source": "https://api.github.com/meta"
+    },
+    {
+      "ipv4_count": 96,
+      "ipv6_count": 15,
+      "name": "google",
+      "ok": true,
+      "source": "https://www.gstatic.com/ipranges/goog.json"
+    },
+    {
+      "ipv4_count": 9,
+      "ipv6_count": 5,
+      "name": "telegram",
+      "ok": true,
+      "source": "https://core.telegram.org/resources/cidr.txt"
+    },
+    {
+      "ipv4_count": 7,
+      "ipv6_count": 3,
+      "name": "wikipedia",
+      "ok": true,
+      "source": "https://wikitech.wikimedia.org/wiki/IP_and_AS_allocations"
+    }
+  ],
+  "selected_sources": [
+    "amazon",
+    "china",
+    "cloudflare",
+    "fastly",
+    "github",
+    "google",
+    "telegram",
+    "wikipedia"
+  ]
+}

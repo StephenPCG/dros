@@ -18,10 +18,17 @@ any selected object is invalid.
 ## Initial Plugins
 
 - `system.mirror` owns Debian apt sources and the Docker CE apt source.
-- `network.core` owns hostname, hosts, sysctl, nftables entrypoint, dnsmasq,
-  avahi, and core network packages.
+- `network.core` owns hostname, hosts, sysctl, the DROS nftables snippet
+  directory, dnsmasq, avahi, and core network packages.
 - `network.interfaces` owns `DevGroup` and `Interface` objects, ifupdown
   fragments, PPP hook dispatch, and runtime interface properties.
+- `network.routing` owns `FwMark`, `Gateway`, `RouteTable`, and
+  `RouteRuleSet` objects, route table names, policy route rules, and route
+  refresh hooks.
+- `network.firewall` owns `Firewall` objects, `/etc/nftables.conf`, and the
+  generated base nftables ruleset under `/etc/dros/nftables.d`.
+- `ip_lists` owns `IpListUpdater` objects and the cron job that refreshes
+  runtime IP list files.
 - `system.utilities` owns general troubleshooting and admin packages.
 - `docker.core` owns Docker packages, `/etc/docker/daemon.json`, and the Docker
   service post-start hook.
@@ -56,7 +63,13 @@ The bootstrap singleton objects currently used are:
 Detailed ConfigObject references:
 
 - `docs/config-objects/DevGroup.md`
+- `docs/config-objects/Firewall.md`
+- `docs/config-objects/FwMark.md`
+- `docs/config-objects/Gateway.md`
 - `docs/config-objects/Interface.md`
+- `docs/config-objects/IpListUpdater.md`
+- `docs/config-objects/RouteRuleSet.md`
+- `docs/config-objects/RouteTable.md`
 - `docs/config-objects/SystemNetworkConfig.md`
 - `docs/config-objects/SystemMirrorConfig.md`
 
@@ -121,12 +134,30 @@ Bootstrap currently manages:
 - `/etc/systemd/system/docker.service.d/40-dros-hook.conf`
 - `/etc/dnsmasq.conf`
 - `/etc/avahi/avahi-daemon.conf`
-- `/etc/nftables.conf`
 - `/etc/dros/nftables.d`
+- `/etc/network/if-up.d/dros-route`
+- `/etc/network/if-down.d/dros-route`
+- `/etc/ppp/ip-up.d/dros-route`
+- `/etc/ppp/ip-down.d/dros-route`
 - `/etc/ppp/ip-up.d/dros-hook`
 - `/etc/ppp/ipv6-up.d/dros-hook`
 - `/etc/ppp/ip-down.d/dros-hook`
 - `/usr/lib/dros/openvpn-iface`
 
-The nftables entrypoint only includes `/etc/dros/nftables.d/*.nft`; generated
-rules will live there in later phases.
+Bootstrap intentionally does not manage `/etc/nftables.conf`. The operating
+system default stays in place until a `Firewall` object is applied.
+
+`gw update` additionally manages files such as
+`/etc/nftables.conf`, `/etc/dros/nftables.d/10-firewall.nft`, interface-owned
+listen snippets under `/etc/dros/nftables.d/30-interface-*.nft`, and
+`/etc/iproute2/rt_tables.d/dros.conf`. Route updates are rendered to
+`{paths.run}/tmp/update-route.sh` first, then applied from that script; each
+selected route table is written through a separate `ip -batch` block.
+
+IP list files are not ConfigObjects. They are loaded from
+`{paths.configs}/ip-lists`, `{paths.run}/ip-lists`, and
+`{paths.source}/ip-lists`, in that priority order. `gw ip-list update` writes
+downloaded files to `{paths.run}/ip-lists`; DROS also ships a source-tree copy
+under `{paths.source}/ip-lists` so route rules have a useful baseline before
+the first download. If a referenced list is not available, that route is
+skipped; normal CLI updates warn, while hook-triggered silent updates do not.

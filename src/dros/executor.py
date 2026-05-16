@@ -75,7 +75,14 @@ class SystemExecutor:
             self._print(f"created {logical}")
         return True
 
-    def write_file(self, path: str | Path, content: str, *, mode: int = 0o644) -> bool:
+    def write_file(
+        self,
+        path: str | Path,
+        content: str,
+        *,
+        mode: int = 0o644,
+        show_diff: bool = True,
+    ) -> bool:
         target = self.target_path(path)
         logical = _logical_path(path)
         old_content = target.read_text(encoding="utf-8") if target.exists() else None
@@ -89,7 +96,21 @@ class SystemExecutor:
         self.actions.append(SystemAction(kind="write_file", path=logical, message=f"updated {logical}"))
         if self.verbose >= 1:
             self._print(f"updated {logical}")
-            self._print_diff(logical, old_content, content)
+            if show_diff:
+                self._print_diff(logical, old_content, content)
+        return True
+
+    def delete_file(self, path: str | Path) -> bool:
+        target = self.target_path(path)
+        if not target.exists():
+            return False
+        if not target.is_file():
+            raise ValueError(f"managed path is not a file: {path}")
+        target.unlink()
+        logical = _logical_path(path)
+        self.actions.append(SystemAction(kind="delete_file", path=logical, message=f"deleted {logical}"))
+        if self.verbose >= 1:
+            self._print(f"deleted {logical}")
         return True
 
     def run(

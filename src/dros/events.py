@@ -13,6 +13,7 @@ from dros.executor import CommandRunner, SystemAction, SystemExecutor
 from dros.plugins import create_default_registry
 from dros.plugins.base import PluginRegistry, UpdateContext
 from dros.plugins.network_interfaces import handle_event as handle_interface_event
+from dros.plugins.network_routing import handle_event as handle_routing_event
 from dros.settings import DrosSettings
 
 EVENTS_PATH = "events.jsonl"
@@ -56,6 +57,8 @@ def process_event(
         registry=active_registry,
     )
     handle_interface_event(context, event, iface)
+    if event in {"route-refresh", "iface-up", "iface-down", "ppp-up", "ppp-down"}:
+        handle_routing_event(context, event, iface)
     return HookResult(actions=executor.actions)
 
 

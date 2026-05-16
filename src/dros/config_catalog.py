@@ -62,6 +62,96 @@ spec:
   devGroup: lan
 """,
     ),
+    "FwMark": ConfigObjectCatalogEntry(
+        kind="FwMark",
+        example="""apiVersion: dros/v1alpha1
+kind: FwMark
+metadata:
+  name: lab
+spec:
+  mark: "0x00000100"
+  mask: "0x0000ff00"
+""",
+    ),
+    "Gateway": ConfigObjectCatalogEntry(
+        kind="Gateway",
+        example="""apiVersion: dros/v1alpha1
+kind: Gateway
+metadata:
+  name: wan
+spec:
+  dev: pppoe-wan
+  via: 10.0.0.1
+  onlink: true
+  metric: 100
+""",
+    ),
+    "RouteTable": ConfigObjectCatalogEntry(
+        kind="RouteTable",
+        example="""apiVersion: dros/v1alpha1
+kind: RouteTable
+metadata:
+  name: wan
+spec:
+  family: ipv4
+  table: 100
+  routes:
+    - to: default
+      gateway: wan
+    - to: 192.0.2.0/24
+      type: unreachable
+""",
+    ),
+    "RouteRuleSet": ConfigObjectCatalogEntry(
+        kind="RouteRuleSet",
+        example="""apiVersion: dros/v1alpha1
+kind: RouteRuleSet
+metadata:
+  name: policy
+spec:
+  family: ipv4
+  managedPriority:
+    start: 10000
+    end: 10999
+  rules:
+    - priority: 10010
+      fwMark: lab
+      lookup: wan
+""",
+    ),
+    "Firewall": ConfigObjectCatalogEntry(
+        kind="Firewall",
+        example="""apiVersion: dros/v1alpha1
+kind: Firewall
+metadata:
+  name: main
+spec:
+  defaults:
+    inputPolicy: drop
+    forwardPolicy: drop
+    outputPolicy: accept
+  interfaceRules:
+    - subject: devgroup/lan
+      input:
+        ping: true
+        services:
+          - tcp/22
+          - udp/53
+      forward:
+        policy: accept
+""",
+    ),
+    "IpListUpdater": ConfigObjectCatalogEntry(
+        kind="IpListUpdater",
+        example="""apiVersion: dros/v1alpha1
+kind: IpListUpdater
+metadata:
+  name: system
+spec:
+  enabled: true
+  cron: "0 1 *"
+""",
+    ),
 }
 
 

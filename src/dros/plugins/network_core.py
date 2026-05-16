@@ -28,7 +28,6 @@ MANAGED_FILES = frozenset(
         "/etc/dnsmasq.conf",
         "/etc/hostname",
         "/etc/hosts",
-        "/etc/nftables.conf",
         "/etc/sysctl.d/99-dros.conf",
     }
 )
@@ -60,10 +59,6 @@ def bootstrap(context: BootstrapContext) -> None:
 
     sysctl_changed = context.executor.write_file("/etc/sysctl.d/99-dros.conf", _sysctl_file(network))
     context.executor.ensure_dir("/etc/dros/nftables.d")
-    context.executor.write_file(
-        "/etc/nftables.conf",
-        'include "/etc/dros/nftables.d/*.nft"\n',
-    )
     context.executor.write_file("/etc/dnsmasq.conf", "")
     context.executor.write_file("/etc/avahi/avahi-daemon.conf", _avahi_daemon_conf())
     context.executor.install_missing_packages(PACKAGES)

@@ -37,6 +37,118 @@ class DevGroupConfig(BaseModel):
     id: int
 
 
+class FwMarkConfig(BaseModel):
+    model_config = ConfigDict(extra="ignore", populate_by_name=True)
+
+    mark: int | str = Field(validation_alias=AliasChoices("mark", "value"))
+    mask: int | str = "0xffffffff"
+
+
+class GatewayHopConfig(BaseModel):
+    model_config = ConfigDict(extra="ignore", populate_by_name=True)
+
+    dev: str
+    via: str | None = None
+    weight: int | None = None
+    onlink: bool = False
+
+
+class GatewayConfig(BaseModel):
+    model_config = ConfigDict(extra="ignore", populate_by_name=True)
+
+    dev: str | None = None
+    via: str | None = None
+    onlink: bool = False
+    metric: int | None = None
+    nexthops: list[GatewayHopConfig] = Field(default_factory=list)
+
+
+class RouteConfig(BaseModel):
+    model_config = ConfigDict(extra="ignore", populate_by_name=True)
+
+    to: str | None = None
+    gateway: str | None = None
+    type: Literal["route", "unreachable", "blackhole", "prohibit"] = "route"
+    metric: int | None = None
+    raw: str | None = None
+
+
+class RouteTableConfig(BaseModel):
+    model_config = ConfigDict(extra="ignore", populate_by_name=True)
+
+    family: Literal["ipv4", "ipv6"] = "ipv4"
+    table: int | str = Field(validation_alias=AliasChoices("table", "id"))
+    routes: list[RouteConfig] = Field(default_factory=list)
+
+
+class ManagedPriorityConfig(BaseModel):
+    model_config = ConfigDict(extra="ignore", populate_by_name=True)
+
+    start: int
+    end: int
+
+
+class RouteRuleConfig(BaseModel):
+    model_config = ConfigDict(extra="ignore", populate_by_name=True)
+
+    priority: int
+    lookup: int | str | None = None
+    fw_mark: str | None = Field(
+        None,
+        validation_alias=AliasChoices("fw_mark", "fwMark"),
+    )
+    fwmark: str | None = None
+    from_: str | None = Field(None, validation_alias=AliasChoices("from", "from_"))
+    to: str | None = None
+    iif: str | None = None
+    oif: str | None = None
+    uidrange: str | None = None
+    suppress_prefixlength: int | None = Field(
+        None,
+        validation_alias=AliasChoices("suppress_prefixlength", "suppressPrefixlength"),
+    )
+    raw: str | None = None
+
+
+class RouteRuleSetConfig(BaseModel):
+    model_config = ConfigDict(extra="ignore", populate_by_name=True)
+
+    family: Literal["ipv4", "ipv6"] = "ipv4"
+    managed_priority: ManagedPriorityConfig = Field(
+        validation_alias=AliasChoices("managed_priority", "managedPriority"),
+    )
+    rules: list[RouteRuleConfig] = Field(default_factory=list)
+
+
+class FirewallConfig(BaseModel):
+    model_config = ConfigDict(extra="ignore", populate_by_name=True)
+
+    defaults: dict[str, Any] = Field(default_factory=dict)
+    interface_rules: list[dict[str, Any]] = Field(
+        default_factory=list,
+        validation_alias=AliasChoices("interface_rules", "interfaceRules"),
+    )
+    nat_rules: list[dict[str, Any]] = Field(
+        default_factory=list,
+        validation_alias=AliasChoices("nat_rules", "natRules"),
+    )
+    firewall_rules: list[dict[str, Any]] = Field(
+        default_factory=list,
+        validation_alias=AliasChoices("firewall_rules", "firewallRules"),
+    )
+    mark_rules: list[dict[str, Any]] = Field(
+        default_factory=list,
+        validation_alias=AliasChoices("mark_rules", "markRules"),
+    )
+
+
+class IpListUpdaterConfig(BaseModel):
+    model_config = ConfigDict(extra="ignore", populate_by_name=True)
+
+    enabled: bool = True
+    cron: str = "0 1 *"
+
+
 class InterfaceConfig(BaseModel):
     model_config = ConfigDict(extra="ignore", populate_by_name=True)
 
@@ -143,6 +255,7 @@ class InterfaceConfig(BaseModel):
         validation_alias=AliasChoices("crl_file", "crlFile"),
     )
     up: str | None = None
+    listen: dict[str, Any] | list[dict[str, Any]] | None = None
 
 
 @dataclass(frozen=True)

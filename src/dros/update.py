@@ -7,7 +7,7 @@ from rich.console import Console
 
 from dros.config_objects import ConfigObject, load_config_objects
 from dros.executor import CommandRunner, SystemAction, SystemExecutor
-from dros.kind_aliases import resolve_kind_alias
+from dros.kind_aliases import resolve_kind_alias, resolve_kind_group
 from dros.plugins import create_default_registry
 from dros.plugins.base import PluginRegistry, UpdateContext
 from dros.settings import DrosSettings
@@ -95,6 +95,11 @@ def _parse_target(target: str | None) -> UpdateTarget:
 def _select_objects(objects: list[ConfigObject], target: UpdateTarget) -> list[ConfigObject]:
     if target.kind is None:
         return objects
+    group = resolve_kind_group(target.kind)
+    if group is not None:
+        if target.name is not None:
+            raise ValueError(f"ConfigObject group target does not support a name: {target.kind}")
+        return [obj for obj in objects if obj.kind in group]
     matches = [obj for obj in objects if obj.kind == target.kind]
     if target.name is None:
         return matches

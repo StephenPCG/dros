@@ -83,6 +83,14 @@ def test_config_create_accepts_kind_alias(capsys) -> None:
     assert "type: bridge" in output
 
 
+def test_config_create_accepts_ip_list_updater_alias(capsys) -> None:
+    assert cli_main.main(["config", "create", "ip-list-updater"]) == 0
+
+    output = capsys.readouterr().out
+    assert "kind: IpListUpdater" in output
+    assert 'cron: "0 1 *"' in output
+
+
 def test_update_command_loads_settings_and_runs_update(monkeypatch, tmp_path: Path) -> None:
     settings_file = tmp_path / "settings.yaml"
     settings_file.write_text(

@@ -183,6 +183,12 @@ spec:
   type: openvpn
   configFile: /opt/gateway/ovpn/lab/client.conf
   crlFile: /opt/gateway/ovpn/lab/pki/crl.pem
+  listen:
+    proto: udp
+    port: 1194
+    from:
+      devGroups:
+        - wan
   devGroup: vpn
 ```
 
@@ -463,6 +469,8 @@ wg set $IFACE private-key <privateKeyFile>
 ### `spec.listenPort`
 
 仅 `type: wireguard` 使用。WireGuard UDP 监听端口，写入 `ListenPort`。
+`network.interfaces` 会同时写入 `/etc/dros/nftables.d/30-interface-<name>.nft`，
+生成 nftables `input_pre` 放行规则。
 
 取值范围：`1` 到 `65535`。
 
@@ -520,6 +528,41 @@ OpenVPN 前检查该文件可读，并追加 `--crl-verify <crlFile>`。
 
 如果设置了 `devGroup` 或 `up`，DROS 会生成 `/etc/dros/openvpn/<name>.up`。该脚本会在
 OpenVPN 设备出现后先设置 `devGroup`，然后执行 `up` 命令。
+
+默认值：无。
+
+### `spec.listen`
+
+仅 `type: openvpn` 使用。描述 OpenVPN 的监听端口，供 `network.interfaces`
+生成 `/etc/dros/nftables.d/30-interface-<name>.nft` 中的 nftables `input_pre`
+放行规则；不会自动改写 OpenVPN 配置本身。
+
+可以写成单个对象，也可以写成对象列表：
+
+```yaml
+listen:
+  proto: udp
+  port: 1194
+  from:
+    ifaces:
+      - eth0
+    devGroups:
+      - wan
+```
+
+字段：
+
+- `proto`：`tcp` 或 `udp`
+- `port`：监听端口，取值范围 `1` 到 `65535`
+- `from.ifaces`：可选，限制入接口名称
+- `from.devGroups`：可选，限制入接口 group，引用 `DevGroup`
+
+如果 `from` 为空，规则会允许所有来源 interface。
+
+如果 `Firewall` 尚未应用，bootstrap 默认的 `/etc/nftables.conf` 不会 include
+`/etc/dros/nftables.d`，因此写入该 snippet 是安全的，也不会触发 nft reload。
+检测到 `/etc/dros/nftables.d/10-firewall.nft` 和 `/etc/nftables.conf` 已存在时，
+更新 listen snippet 后会重新加载 nftables。
 
 默认值：无。
 
