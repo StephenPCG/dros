@@ -22,6 +22,8 @@ previous rewrite.
 ```sh
 uv sync
 uv run gw help
+uv run gw restart daemon
+uv run gw restart web
 uv run pytest -q
 uv run python -m compileall -q src/dros
 ```
@@ -37,6 +39,8 @@ npm run build
 ## Lab Testing
 
 The Debian test host is documented in `docs/lab/test-gw.md`.
+
+Bootstrap and plugin design notes live in `docs/bootstrap.md`.
 
 ## Install
 
@@ -66,3 +70,8 @@ Test profile services:
 - `dros-daemon-test.service`
 - `dros-web-test.service`, listening on `0.0.0.0:8766`
 - daemon socket: `/opt/gateway/test/run/drosd-test.sock`
+
+Use `gw restart daemon` and `gw restart web` to restart the release services.
+Use `gw-test restart daemon` and `gw-test restart web` to restart the test
+services. These commands automatically use `sudo` when the current user is not
+root.
