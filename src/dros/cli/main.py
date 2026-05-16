@@ -16,6 +16,7 @@ from dros.bootstrap import run_bootstrap
 from dros.cli.privilege import path_writable_for_current_user, reexec_with_sudo
 from dros.cli.services import restart_local_service
 from dros.config_catalog import render_config_object_example
+from dros.events import enqueue_event, process_event
 from dros.settings import DEFAULT_SETTINGS_PATH, DrosSettings, load_settings
 from dros.update import UpdateValidationError, run_update
 from dros.web.auth import WebAuthStore, resolve_auth_db_path
@@ -75,6 +76,23 @@ def update(target: str | None = None, verbose: int = 1) -> None:
         raise SystemExit(1) from exc
     except (KeyError, OSError, RuntimeError, ValueError, subprocess.CalledProcessError) as exc:
         error_console.print(f"[red]update failed:[/red] {exc}")
+        raise SystemExit(1) from exc
+
+
+@app.command
+def hook(event: str, iface: str | None = None, verbose: int = 0, process_now: bool = False) -> None:
+    """Queue a system hook event for drosd."""
+    if verbose not in {0, 1, 2}:
+        error_console.print("[red]hook failed:[/red] --verbose must be 0, 1, or 2")
+        raise SystemExit(2)
+
+    try:
+        settings = _load_cli_settings()
+        enqueue_event(settings, event, iface)
+        if process_now:
+            process_event(settings, event, iface=iface, verbose=verbose, console=console)
+    except (OSError, RuntimeError, ValueError, subprocess.CalledProcessError) as exc:
+        error_console.print(f"[red]hook failed:[/red] {exc}")
         raise SystemExit(1) from exc
 
 

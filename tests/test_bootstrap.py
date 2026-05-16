@@ -67,10 +67,21 @@ spec:
     docker_config = (sysroot / "etc/docker/daemon.json").read_text(encoding="utf-8")
     assert '"iptables": false' in docker_config
     assert '"https://registry.example"' in docker_config
+    docker_hook = (
+        sysroot / "etc/systemd/system/docker.service.d/40-dros-hook.conf"
+    ).read_text(encoding="utf-8")
+    assert "ExecStartPost=-/usr/local/bin/gw hook docker-start --verbose 0" in docker_hook
     assert (sysroot / "etc/dnsmasq.conf").read_text(encoding="utf-8") == ""
     assert "enable-reflector=yes" in (
         sysroot / "etc/avahi/avahi-daemon.conf"
     ).read_text(encoding="utf-8")
+    ppp_hook = (sysroot / "etc/ppp/ip-up.d/dros-hook").read_text(encoding="utf-8")
+    assert 'gw hook ppp-up "$IFACE" --verbose 0' in ppp_hook
+    openvpn_helper = (sysroot / "usr/lib/dros/openvpn-iface").read_text(
+        encoding="utf-8"
+    )
+    assert "usage: openvpn-iface start IFACE CONFIG PID UP_SCRIPT CRL_FILE LOG_FILE" in openvpn_helper
+    assert "--log-append" in openvpn_helper
     assert 'include "/etc/dros/nftables.d/*.nft"' in (
         sysroot / "etc/nftables.conf"
     ).read_text(encoding="utf-8")
@@ -131,7 +142,7 @@ def test_bootstrap_installs_only_missing_packages(tmp_path: Path) -> None:
     settings = _settings(tmp_path)
     settings.paths.configs.mkdir(parents=True)
     owned_packages = create_default_registry().owned_packages()
-    installed_packages = owned_packages - {"dnsmasq", "docker-ce"}
+    installed_packages = owned_packages - {"bridge-utils", "dnsmasq", "docker-ce"}
 
     result = run_bootstrap(
         settings,
@@ -141,7 +152,8 @@ def test_bootstrap_installs_only_missing_packages(tmp_path: Path) -> None:
 
     install_commands = [action.command for action in result.actions if action.kind == "run_command"]
     flat_commands = [" ".join(command or []) for command in install_commands]
-    assert any("apt-get install -y dnsmasq" in command for command in flat_commands)
+    assert any("apt-get install -y" in command and "bridge-utils" in command for command in flat_commands)
+    assert any("apt-get install -y" in command and "dnsmasq" in command for command in flat_commands)
     assert any("apt-get install -y docker-ce" in command for command in flat_commands)
     assert not any("apt-get install -y curl" in command for command in flat_commands)
 

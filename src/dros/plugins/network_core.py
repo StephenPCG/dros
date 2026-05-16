@@ -8,6 +8,7 @@ from dros.plugins.base import BootstrapContext, DrosPlugin, UpdateContext
 PACKAGES = frozenset(
     {
         "avahi-daemon",
+        "bridge-utils",
         "dnsmasq",
         "ifupdown",
         "nftables",

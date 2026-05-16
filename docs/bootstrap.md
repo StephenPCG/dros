@@ -7,9 +7,9 @@ Each plugin registers the bootstrap work it owns.
 The CLI loads `/etc/dros/settings.yaml` by default. On development hosts, pass
 an explicit `--settings` file that points `sysRoot` at a test directory.
 
-`gw update` will be object-driven later: each ConfigObject is routed to the
-plugin that owns its kind, even if the object represents something that also
-matters during bootstrap.
+`gw update` is object-driven: each ConfigObject is routed to the plugin that
+owns its kind, even if the object represents something that also matters during
+bootstrap.
 
 Before `gw update` writes files or runs commands, it validates every selected
 ConfigObject and prints all collected errors. No selected object is applied if
@@ -20,15 +20,19 @@ any selected object is invalid.
 - `system.mirror` owns Debian apt sources and the Docker CE apt source.
 - `network.core` owns hostname, hosts, sysctl, nftables entrypoint, dnsmasq,
   avahi, and core network packages.
+- `network.interfaces` owns `DevGroup` and `Interface` objects, ifupdown
+  fragments, PPP hook dispatch, and runtime interface properties.
 - `system.utilities` owns general troubleshooting and admin packages.
-- `docker.core` owns Docker packages and `/etc/docker/daemon.json`.
+- `docker.core` owns Docker packages, `/etc/docker/daemon.json`, and the Docker
+  service post-start hook.
 
 Plugins declare their owned system packages and managed files. The registry
 rejects duplicate ownership so later work cannot accidentally make two plugins
 fight over the same package or file.
 
-The registry also keeps a placeholder for event hooks. Later, commands like
-`gw hook iface-up ...` can be dispatched through the same plugin boundary.
+The registry also keeps event hook metadata. System hooks currently enqueue
+events through `gw hook ...`; `drosd` polls the run directory queue and handles
+the event against the effective ConfigObjects loaded from `paths.configs`.
 
 ## ConfigObjects
 
@@ -66,6 +70,23 @@ exactly one object of that kind, DROS uses that object. This keeps names like
 Objects with `metadata.disabled: true` are ignored. If the system side also
 needs cleanup, run the future `gw remove kind/name` command.
 
+## Config Directory Semantics
+
+Configured `paths.configs` is treated as the desired current state.
+
+There is no separate committed ConfigObject tree. Daily usage assumes config
+files are edited deliberately and usually followed immediately by `gw update`.
+This keeps CLI output and system changes easy to reason about: the same
+effective config loader is used by manual CLI updates, daemon-triggered hook
+work, bootstrap hooks, and Web status helpers.
+
+`gw update` still supports a target such as `gw update iface/br0`; in that case
+only the selected objects are validated and applied, while dependency checks may
+still inspect other loaded ConfigObjects where needed.
+
+Runtime queues, logs, Web auth data, and similar state may still live under
+`paths.run`; DROS does not mirror ConfigObjects there.
+
 ## Output And Idempotence
 
 Bootstrap uses the same execution rules future update code should follow:
@@ -97,10 +118,15 @@ Bootstrap currently manages:
 - `/etc/apt/sources.list`
 - `/etc/apt/sources.list.d/docker-ce.list`
 - `/etc/docker/daemon.json`
+- `/etc/systemd/system/docker.service.d/40-dros-hook.conf`
 - `/etc/dnsmasq.conf`
 - `/etc/avahi/avahi-daemon.conf`
 - `/etc/nftables.conf`
 - `/etc/dros/nftables.d`
+- `/etc/ppp/ip-up.d/dros-hook`
+- `/etc/ppp/ipv6-up.d/dros-hook`
+- `/etc/ppp/ip-down.d/dros-hook`
+- `/usr/lib/dros/openvpn-iface`
 
 The nftables entrypoint only includes `/etc/dros/nftables.d/*.nft`; generated
 rules will live there in later phases.

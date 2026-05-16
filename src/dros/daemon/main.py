@@ -9,6 +9,7 @@ from pathlib import Path
 
 from rich.console import Console
 
+from dros.events import process_event_queue
 from dros.settings import load_settings
 
 console = Console()
@@ -36,7 +37,9 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     signal.signal(signal.SIGTERM, request_stop)
     signal.signal(signal.SIGINT, request_stop)
-    stop.wait()
+    offset = 0
+    while not stop.wait(2):
+        offset = process_event_queue(settings, offset=offset, console=console)
     return 0
 
 

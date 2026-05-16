@@ -6,7 +6,12 @@ from dros.config_objects import SystemMirrorConfig
 from dros.plugins.base import BootstrapContext, DrosPlugin
 
 PACKAGES = frozenset({"docker-buildx-plugin", "docker-ce", "docker-compose-plugin"})
-MANAGED_FILES = frozenset({"/etc/docker/daemon.json"})
+MANAGED_FILES = frozenset(
+    {
+        "/etc/docker/daemon.json",
+        "/etc/systemd/system/docker.service.d/40-dros-hook.conf",
+    }
+)
 
 
 def create_plugin() -> DrosPlugin:
@@ -25,7 +30,13 @@ def bootstrap(context: BootstrapContext) -> None:
         "/etc/docker/daemon.json",
         _docker_daemon_config(mirror),
     )
+    hook_changed = context.executor.write_file(
+        "/etc/systemd/system/docker.service.d/40-dros-hook.conf",
+        _docker_service_hook(),
+    )
     context.executor.install_missing_packages(PACKAGES)
+    if hook_changed:
+        context.executor.run(["systemctl", "daemon-reload"], real_only=True)
     if config_changed:
         context.executor.run(["systemctl", "restart", "docker"], real_only=True)
 
@@ -38,3 +49,9 @@ def _docker_daemon_config(mirror: SystemMirrorConfig) -> str:
     if mirror.docker_registry_mirror:
         config["registry-mirrors"] = [mirror.docker_registry_mirror]
     return f"{json.dumps(config, indent=2, sort_keys=True)}\n"
+
+
+def _docker_service_hook() -> str:
+    return """[Service]
+ExecStartPost=-/usr/local/bin/gw hook docker-start --verbose 0
+"""

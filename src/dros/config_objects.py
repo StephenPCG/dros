@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal, TypeVar
+from typing import Any, Literal, TypeVar
 
 import yaml
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field
@@ -40,7 +40,17 @@ class DevGroupConfig(BaseModel):
 class InterfaceConfig(BaseModel):
     model_config = ConfigDict(extra="ignore", populate_by_name=True)
 
-    type: Literal["eth", "bridge", "vlan"]
+    type: Literal[
+        "eth",
+        "bridge",
+        "vlan",
+        "loopback",
+        "docker",
+        "gre",
+        "pppoe",
+        "wireguard",
+        "openvpn",
+    ]
     dhcp: bool = False
     address: str | None = None
     gateway: str | None = None
@@ -59,6 +69,80 @@ class InterfaceConfig(BaseModel):
     )
     parent: str | None = None
     id: int | None = None
+    subnet: str | None = None
+    local_vip: str | None = Field(
+        None,
+        validation_alias=AliasChoices("local_vip", "localVip"),
+    )
+    remote_vip: str | None = Field(
+        None,
+        validation_alias=AliasChoices("remote_vip", "remoteVip"),
+    )
+    local_public_ip: str | None = Field(
+        None,
+        validation_alias=AliasChoices("local_public_ip", "localPublicIp"),
+    )
+    remote_public_ip: str | None = Field(
+        None,
+        validation_alias=AliasChoices("remote_public_ip", "remotePublicIp"),
+    )
+    xfrm_transport: str | None = Field(
+        None,
+        validation_alias=AliasChoices("xfrm_transport", "xfrmTransport"),
+    )
+    ttl: int = 255
+    device: str | None = None
+    user: str | None = None
+    password: str | None = None
+    hide_password: bool = Field(
+        True,
+        validation_alias=AliasChoices("hide_password", "hidePassword"),
+    )
+    noauth: bool = True
+    maxfail: int = 0
+    persist: bool = True
+    debug: bool = True
+    holdoff: int = 5
+    manage_device: bool = Field(
+        True,
+        validation_alias=AliasChoices("manage_device", "manageDevice"),
+    )
+    noipdefault: bool = True
+    defaultroute: bool = True
+    replacedefaultroute: bool = False
+    noproxyarp: bool = True
+    ipv6: bool = True
+    ipv6cp_use_ipaddr: bool = Field(
+        True,
+        validation_alias=AliasChoices("ipv6cp_use_ipaddr", "ipv6cpUseIpaddr"),
+    )
+    use_peer_dns: bool = Field(
+        False,
+        validation_alias=AliasChoices("use_peer_dns", "usePeerDNS"),
+    )
+    private_key: str | None = Field(
+        None,
+        validation_alias=AliasChoices("private_key", "privateKey"),
+    )
+    private_key_file: str | None = Field(
+        None,
+        validation_alias=AliasChoices("private_key_file", "privateKeyFile"),
+    )
+    listen_port: int | None = Field(
+        None,
+        validation_alias=AliasChoices("listen_port", "listenPort"),
+    )
+    peers: list[dict[str, Any]] = Field(default_factory=list)
+    config: str | None = None
+    config_file: str | None = Field(
+        None,
+        validation_alias=AliasChoices("config_file", "configFile"),
+    )
+    crl_file: str | None = Field(
+        None,
+        validation_alias=AliasChoices("crl_file", "crlFile"),
+    )
+    up: str | None = None
 
 
 @dataclass(frozen=True)
