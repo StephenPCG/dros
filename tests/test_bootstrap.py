@@ -77,6 +77,11 @@ spec:
     ).read_text(encoding="utf-8")
     ppp_hook = (sysroot / "etc/ppp/ip-up.d/dros-hook").read_text(encoding="utf-8")
     assert 'gw hook ppp-up "$IFACE" --verbose 0' in ppp_hook
+    route_hook = (sysroot / "etc/network/if-up.d/dros-route").read_text(
+        encoding="utf-8"
+    )
+    assert 'case "$IFACE" in' in route_hook
+    assert 'exec /usr/local/bin/gw hook route-refresh --verbose 0' in route_hook
     openvpn_helper = (sysroot / "usr/lib/dros/openvpn-iface").read_text(
         encoding="utf-8"
     )

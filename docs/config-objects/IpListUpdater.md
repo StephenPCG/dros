@@ -28,7 +28,7 @@ metadata:
   name: system
 spec:
   enabled: true
-  cron: "0 1 *"
+  schedule: "0 1 *"
 ```
 
 该配置会生成 `/etc/cron.d/dros-ip-list-updater`，每天 1 点执行：
@@ -85,7 +85,7 @@ spec:
 
 设置为 `false` 时，删除 `/etc/cron.d/dros-ip-list-updater`。
 
-### `spec.cron`
+### `spec.schedule`
 
 更新时间。
 
@@ -95,6 +95,9 @@ DROS 支持两种写法：
 
 - 三段写法：`minute hour day-of-week`，例如 `0 1 *` 会渲染为 `0 1 * * *`
 - 五段标准 cron 写法：例如 `17 4 * * *`
+
+兼容性：旧字段 `cron` 仍可读取，但新配置推荐使用 `schedule`，与
+`DnsmasqChinaNames.spec.schedule` 保持一致。
 
 ## CLI
 

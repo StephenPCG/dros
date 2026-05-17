@@ -146,7 +146,133 @@ class IpListUpdaterConfig(BaseModel):
     model_config = ConfigDict(extra="ignore", populate_by_name=True)
 
     enabled: bool = True
-    cron: str = "0 1 *"
+    schedule: str = Field("0 1 *", validation_alias=AliasChoices("schedule", "cron"))
+
+
+class DnsmasqDNSConfig(BaseModel):
+    model_config = ConfigDict(extra="ignore", populate_by_name=True)
+
+    enabled: bool = True
+    interfaces: list[str] = Field(default_factory=list)
+    except_interfaces: list[str] = Field(
+        default_factory=list,
+        validation_alias=AliasChoices("except_interfaces", "exceptInterfaces"),
+    )
+    listen_addresses: list[str] = Field(
+        default_factory=list,
+        validation_alias=AliasChoices("listen_addresses", "listenAddresses"),
+    )
+    bind_interfaces: bool = Field(
+        False,
+        validation_alias=AliasChoices("bind_interfaces", "bindInterfaces"),
+    )
+    no_resolv: bool = Field(True, validation_alias=AliasChoices("no_resolv", "noResolv"))
+    no_negcache: bool = Field(True, validation_alias=AliasChoices("no_negcache", "noNegcache"))
+    no_hosts: bool = Field(True, validation_alias=AliasChoices("no_hosts", "noHosts"))
+    all_servers: bool = Field(False, validation_alias=AliasChoices("all_servers", "allServers"))
+    bogus_priv: bool = Field(True, validation_alias=AliasChoices("bogus_priv", "bogusPriv"))
+    domain_needed: bool = Field(
+        True,
+        validation_alias=AliasChoices("domain_needed", "domainNeeded"),
+    )
+    expand_hosts: bool = Field(False, validation_alias=AliasChoices("expand_hosts", "expandHosts"))
+    local_ttl: int | None = Field(None, validation_alias=AliasChoices("local_ttl", "localTtl"))
+    cache_size: int | None = Field(None, validation_alias=AliasChoices("cache_size", "cacheSize"))
+    log_queries: bool = Field(False, validation_alias=AliasChoices("log_queries", "logQueries"))
+    log_async: int | None = Field(None, validation_alias=AliasChoices("log_async", "logAsync"))
+    log_file: str | None = Field(None, validation_alias=AliasChoices("log_file", "logFile"))
+    port: int | None = None
+    conf_files: list[str] = Field(
+        default_factory=list,
+        validation_alias=AliasChoices("conf_files", "confFiles"),
+    )
+    conf_dirs: list[str] = Field(
+        default_factory=list,
+        validation_alias=AliasChoices("conf_dirs", "confDirs"),
+    )
+    addn_hosts: list[str] = Field(
+        default_factory=list,
+        validation_alias=AliasChoices("addn_hosts", "addnHosts"),
+    )
+    servers: list[str] = Field(default_factory=list)
+    locals: list[str] = Field(default_factory=list)
+    addresses: list[str] = Field(default_factory=list)
+    host_records: list[str] = Field(
+        default_factory=list,
+        validation_alias=AliasChoices("host_records", "hostRecords"),
+    )
+    srv_hosts: list[str] = Field(
+        default_factory=list,
+        validation_alias=AliasChoices("srv_hosts", "srvHosts"),
+    )
+    cname_records: list[str] = Field(
+        default_factory=list,
+        validation_alias=AliasChoices("cname_records", "cnameRecords"),
+    )
+    raw_options: list[str] = Field(
+        default_factory=list,
+        validation_alias=AliasChoices("raw_options", "rawOptions"),
+    )
+    raw: list[str] = Field(default_factory=list)
+
+
+class DnsmasqDHCPRangeConfig(BaseModel):
+    model_config = ConfigDict(extra="ignore", populate_by_name=True)
+
+    tag: str
+    start: str
+    end: str | None = None
+    netmask: str | None = None
+    broadcast: str | None = None
+    router: str | None = None
+    mode: str | None = None
+    lease: str = "24h"
+
+
+class DnsmasqDHCPConfig(BaseModel):
+    model_config = ConfigDict(extra="ignore", populate_by_name=True)
+
+    enabled: bool = True
+    authoritative: bool = False
+    domain: str | None = None
+    dns_servers: list[str] = Field(
+        default_factory=list,
+        validation_alias=AliasChoices("dns_servers", "dnsServers"),
+    )
+    v6_dns_servers: list[str] = Field(
+        default_factory=list,
+        validation_alias=AliasChoices("v6_dns_servers", "v6DnsServers"),
+    )
+    options: list[str] = Field(default_factory=list)
+    ranges: list[DnsmasqDHCPRangeConfig] = Field(default_factory=list)
+    hosts: list[str] = Field(default_factory=list)
+    raw_options: list[str] = Field(
+        default_factory=list,
+        validation_alias=AliasChoices("raw_options", "rawOptions"),
+    )
+    raw: list[str] = Field(default_factory=list)
+
+
+class DnsmasqChinaNamesConfig(BaseModel):
+    model_config = ConfigDict(extra="ignore", populate_by_name=True)
+
+    enabled: bool = True
+    servers: list[str] = Field(default_factory=list)
+    files: list[str] = Field(default_factory=list)
+    manual_names: list[str] = Field(
+        default_factory=list,
+        validation_alias=AliasChoices("manual_names", "manualNames"),
+    )
+    manual_name_files: list[str] = Field(
+        default_factory=list,
+        validation_alias=AliasChoices("manual_name_files", "manualNameFiles"),
+    )
+    cron_enabled: bool = Field(
+        True,
+        validation_alias=AliasChoices("cron_enabled", "cronEnabled"),
+    )
+    schedule: str = "27 4 * * *"
+    command: str | None = None
 
 
 class InterfaceConfig(BaseModel):

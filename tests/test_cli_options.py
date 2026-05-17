@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 from dros.cli import main as cli_main
@@ -48,6 +49,8 @@ def test_bootstrap_command_loads_settings_and_runs_bootstrap(
 sysRoot: {tmp_path / "sysroot"}
 paths:
   configs: {tmp_path / "configs"}
+  logs: {tmp_path / "logs"}
+  run: {tmp_path / "run"}
 """.lstrip(),
         encoding="utf-8",
     )
@@ -88,7 +91,18 @@ def test_config_create_accepts_ip_list_updater_alias(capsys) -> None:
 
     output = capsys.readouterr().out
     assert "kind: IpListUpdater" in output
-    assert 'cron: "0 1 *"' in output
+    assert 'schedule: "0 1 *"' in output
+
+
+def test_config_create_accepts_dnsmasq_aliases(capsys) -> None:
+    assert cli_main.main(["config", "create", "dns"]) == 0
+    assert "kind: DnsmasqDNS" in capsys.readouterr().out
+
+    assert cli_main.main(["config", "create", "dhcp"]) == 0
+    assert "kind: DnsmasqDHCP" in capsys.readouterr().out
+
+    assert cli_main.main(["config", "create", "dnsmasq-china-names"]) == 0
+    assert "kind: DnsmasqChinaNames" in capsys.readouterr().out
 
 
 def test_update_command_loads_settings_and_runs_update(monkeypatch, tmp_path: Path) -> None:
@@ -98,6 +112,8 @@ def test_update_command_loads_settings_and_runs_update(monkeypatch, tmp_path: Pa
 sysRoot: {tmp_path / "sysroot"}
 paths:
   configs: {tmp_path / "configs"}
+  logs: {tmp_path / "logs"}
+  run: {tmp_path / "run"}
 """.lstrip(),
         encoding="utf-8",
     )
@@ -122,6 +138,14 @@ paths:
     assert [(call[0].sys_root, call[1], call[2]) for call in calls] == [
         (tmp_path / "sysroot", "iface/br0", 1)
     ]
+    log_records = [
+        json.loads(line)
+        for line in (tmp_path / "logs/gw-invocations.log").read_text(encoding="utf-8").splitlines()
+    ]
+    assert [record["phase"] for record in log_records] == ["start", "finish"]
+    assert log_records[0]["kind"] == "cli"
+    assert log_records[0]["argv"] == ["--settings", str(settings_file), "update", "iface/br0"]
+    assert log_records[1]["exitCode"] == 0
 
 
 def test_update_command_prints_all_validation_errors(monkeypatch, tmp_path: Path, capsys) -> None:
@@ -131,6 +155,8 @@ def test_update_command_prints_all_validation_errors(monkeypatch, tmp_path: Path
 sysRoot: {tmp_path / "sysroot"}
 paths:
   configs: {tmp_path / "configs"}
+  logs: {tmp_path / "logs"}
+  run: {tmp_path / "run"}
 """.lstrip(),
         encoding="utf-8",
     )
@@ -155,6 +181,45 @@ paths:
     assert "update validation failed:" in output
     assert "Interface/a: bad a" in output
     assert "Interface/b: bad b" in output
+
+
+def test_hook_command_only_enqueues_event_and_logs_invocation(monkeypatch, tmp_path: Path) -> None:
+    settings_file = tmp_path / "settings.yaml"
+    settings_file.write_text(
+        f"""
+sysRoot: {tmp_path / "sysroot"}
+paths:
+  configs: {tmp_path / "configs"}
+  logs: {tmp_path / "logs"}
+  run: {tmp_path / "run"}
+""".lstrip(),
+        encoding="utf-8",
+    )
+
+    def fail_process_event(*_args: object, **_kwargs: object) -> object:
+        raise AssertionError("gw hook should not process events inline by default")
+
+    monkeypatch.setattr(cli_main, "process_event", fail_process_event)
+
+    assert cli_main.main(["--settings", str(settings_file), "hook", "route-refresh", "pppoe-wan"]) == 0
+
+    event_records = [
+        json.loads(line)
+        for line in (tmp_path / "run/events.jsonl").read_text(encoding="utf-8").splitlines()
+    ]
+    assert event_records == [
+        {
+            "event": "route-refresh",
+            "iface": "pppoe-wan",
+            "createdAt": event_records[0]["createdAt"],
+        }
+    ]
+    log_records = [
+        json.loads(line)
+        for line in (tmp_path / "logs/gw-invocations.log").read_text(encoding="utf-8").splitlines()
+    ]
+    assert [record["kind"] for record in log_records] == ["cli", "event.enqueue", "cli"]
+    assert [record["phase"] for record in log_records if record["kind"] == "cli"] == ["start", "finish"]
 
 
 def test_web_create_user_command_creates_login_account(tmp_path: Path) -> None:

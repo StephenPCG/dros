@@ -6,7 +6,9 @@ from pathlib import Path
 import pytest
 from rich.console import Console
 
+from dros.config_objects import InterfaceConfig
 from dros.events import process_event
+from dros.plugins.network_interfaces import _reload_ifupdown_interface
 from dros.settings import DrosPaths, DrosSettings
 from dros.update import UpdateValidationError, run_update
 
@@ -20,6 +22,27 @@ def _settings(tmp_path: Path) -> DrosSettings:
         sysRoot=tmp_path / "sysroot",
         paths=DrosPaths(configs=tmp_path / "configs", run=tmp_path / "run"),
     )
+
+
+def _interface_file(settings: DrosSettings, name: str) -> Path:
+    path = settings.sys_root / "etc/network/interfaces.d" / f"*-dros-{name}.cfg"
+    matches = sorted(path.parent.glob(path.name))
+    assert len(matches) == 1
+    return matches[0]
+
+
+def _interface_file_exists(settings: DrosSettings, name: str) -> bool:
+    path = settings.sys_root / "etc/network/interfaces.d" / f"*-dros-{name}.cfg"
+    return bool(list(path.parent.glob(path.name)))
+
+
+class _FakeReloadContext:
+    def __init__(self) -> None:
+        self.calls: list[tuple[list[str], dict[str, object]]] = []
+        self.executor = self
+
+    def run(self, command: list[str], **kwargs: object) -> None:
+        self.calls.append((command, kwargs))
 
 
 def test_update_interface_writes_ifupdown_bridge_with_devgroups(tmp_path: Path) -> None:
@@ -56,9 +79,8 @@ spec:
 
     run_update(settings, target="iface/br0", console=_console(StringIO()))
 
-    content = (
-        settings.sys_root / "etc/network/interfaces.d/dros-br0.cfg"
-    ).read_text(encoding="utf-8")
+    content = _interface_file(settings, "br0").read_text(encoding="utf-8")
+    assert _interface_file(settings, "br0").name == "010-dros-br0.cfg"
     assert "auto br0\n" in content
     assert "iface br0 inet static\n" in content
     assert "  address 10.0.0.1/24\n" in content
@@ -110,12 +132,13 @@ spec:
 
     result = run_update(settings, target="ifaces", console=_console(StringIO()))
 
-    eth = (settings.sys_root / "etc/network/interfaces.d/dros-eth0.cfg").read_text(
-        encoding="utf-8"
-    )
-    vlan = (settings.sys_root / "etc/network/interfaces.d/dros-br0.10.cfg").read_text(
-        encoding="utf-8"
-    )
+    eth_path = _interface_file(settings, "eth0")
+    vlan_path = _interface_file(settings, "br0.10")
+    eth = eth_path.read_text(encoding="utf-8")
+    vlan = vlan_path.read_text(encoding="utf-8")
+    assert eth_path.name == "010-dros-eth0.cfg"
+    assert _interface_file(settings, "br0").name == "020-dros-br0.cfg"
+    assert vlan_path.name == "030-dros-br0.10.cfg"
     assert "iface eth0 inet dhcp\n" in eth
     assert "  post-up ip link set dev eth0 group 1\n" in eth
     assert "iface br0.10 inet static\n" in vlan
@@ -125,6 +148,109 @@ spec:
     assert "  post-down ip link del dev $IFACE || true\n" in vlan
     assert any(action.command == ["ifup", "eth0"] for action in result.actions)
     assert any(action.command == ["ifup", "br0.10"] for action in result.actions)
+
+
+def test_interface_files_are_numbered_by_dependency_order(tmp_path: Path) -> None:
+    settings = _settings(tmp_path)
+    settings.paths.configs.mkdir(parents=True)
+    (settings.paths.configs / "network.yaml").write_text(
+        """
+kind: Interface
+metadata:
+  name: pppoe-wan
+spec:
+  type: pppoe
+  device: eth0.35
+  user: home@example.net
+  password: secret
+---
+kind: Interface
+metadata:
+  name: br-wan
+spec:
+  type: bridge
+  ports:
+    - eth0.35
+---
+kind: Interface
+metadata:
+  name: eth0.35
+spec:
+  type: vlan
+  parent: eth0
+  id: 35
+---
+kind: Interface
+metadata:
+  name: eth0
+spec:
+  type: eth
+""".lstrip(),
+        encoding="utf-8",
+    )
+
+    run_update(settings, target="ifaces", console=_console(StringIO()))
+
+    names = sorted(path.name for path in (settings.sys_root / "etc/network/interfaces.d").glob("*.cfg"))
+    assert names == [
+        "010-dros-eth0.cfg",
+        "020-dros-eth0.35.cfg",
+        "030-dros-br-wan.cfg",
+        "040-dros-pppoe-wan.cfg",
+    ]
+
+
+def test_update_interface_migrates_legacy_unprefixed_file(tmp_path: Path) -> None:
+    settings = _settings(tmp_path)
+    settings.paths.configs.mkdir(parents=True)
+    old_path = settings.sys_root / "etc/network/interfaces.d/dros-eth0.cfg"
+    old_path.parent.mkdir(parents=True)
+    old_path.write_text("# old generated file\n", encoding="utf-8")
+    (settings.paths.configs / "network.yaml").write_text(
+        """
+kind: Interface
+metadata:
+  name: eth0
+spec:
+  type: eth
+""".lstrip(),
+        encoding="utf-8",
+    )
+
+    result = run_update(settings, target="iface/eth0", console=_console(StringIO()))
+
+    new_path = settings.sys_root / "etc/network/interfaces.d/010-dros-eth0.cfg"
+    assert not old_path.exists()
+    assert new_path.exists()
+    assert any(action.kind == "rename_file" for action in result.actions)
+
+
+def test_update_interface_rejects_dependency_cycles(tmp_path: Path) -> None:
+    settings = _settings(tmp_path)
+    settings.paths.configs.mkdir(parents=True)
+    (settings.paths.configs / "network.yaml").write_text(
+        """
+kind: Interface
+metadata:
+  name: a
+spec:
+  type: vlan
+  parent: b
+  id: 10
+---
+kind: Interface
+metadata:
+  name: b
+spec:
+  type: vlan
+  parent: a
+  id: 11
+""".lstrip(),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(UpdateValidationError, match="dependency cycle"):
+        run_update(settings, target="ifaces", console=_console(StringIO()))
 
 
 def test_update_rejects_interface_with_missing_devgroup(tmp_path: Path) -> None:
@@ -145,7 +271,7 @@ spec:
     with pytest.raises(ValueError, match="DevGroup/lan"):
         run_update(settings, target="iface/br0", console=_console(StringIO()))
 
-    assert not (settings.sys_root / "etc/network/interfaces.d/dros-br0.cfg").exists()
+    assert not _interface_file_exists(settings, "br0")
 
 
 def test_update_collects_all_config_errors_before_writing_files(tmp_path: Path) -> None:
@@ -195,7 +321,7 @@ spec:
     assert "parent Interface/missing0 is not defined" in message
     assert "Interface/br-missing-group" in message
     assert "undefined DevGroup/lan" in message
-    assert not (settings.sys_root / "etc/network/interfaces.d/dros-ok.cfg").exists()
+    assert not _interface_file_exists(settings, "ok")
 
 
 def test_update_target_only_validates_selected_objects(tmp_path: Path) -> None:
@@ -222,7 +348,7 @@ spec:
 
     run_update(settings, target="iface/eth0", console=_console(StringIO()))
 
-    assert (settings.sys_root / "etc/network/interfaces.d/dros-eth0.cfg").exists()
+    assert _interface_file_exists(settings, "eth0")
     assert not (settings.paths.run / "configs").exists()
 
 
@@ -278,8 +404,8 @@ spec:
 
     run_update(settings, target="ifaces", console=_console(StringIO()))
 
-    assert (settings.sys_root / "etc/network/interfaces.d/dros-br0.1.cfg").exists()
-    assert (settings.sys_root / "etc/network/interfaces.d/dros-br0.4094.cfg").exists()
+    assert _interface_file_exists(settings, "br0.1")
+    assert _interface_file_exists(settings, "br0.4094")
 
 
 def test_update_filters_target_aliases(tmp_path: Path) -> None:
@@ -304,8 +430,8 @@ spec:
 
     run_update(settings, target="interface/eth1", console=_console(StringIO()))
 
-    assert not (settings.sys_root / "etc/network/interfaces.d/dros-eth0.cfg").exists()
-    assert (settings.sys_root / "etc/network/interfaces.d/dros-eth1.cfg").exists()
+    assert not _interface_file_exists(settings, "eth0")
+    assert _interface_file_exists(settings, "eth1")
 
 
 def test_update_devgroup_target_is_valid_but_writes_no_files(tmp_path: Path) -> None:
@@ -366,9 +492,7 @@ spec:
 
     run_update(settings, target="iface/lo", console=_console(StringIO()))
 
-    content = (
-        settings.sys_root / "etc/network/interfaces.d/dros-lo.cfg"
-    ).read_text(encoding="utf-8")
+    content = _interface_file(settings, "lo").read_text(encoding="utf-8")
     assert "iface lo inet loopback\n" in content
     assert "  up ip addr add 10.255.0.1/32 dev $IFACE\n" in content
     assert "  up ip addr add fd00::1/128 dev $IFACE\n" in content
@@ -484,29 +608,24 @@ spec:
 
     run_update(settings, target="ifaces", console=_console(StringIO()))
 
-    gre = (
-        settings.sys_root / "etc/network/interfaces.d/dros-gre-office.cfg"
-    ).read_text(encoding="utf-8")
+    gre = _interface_file(settings, "gre-office").read_text(encoding="utf-8")
     assert "iface gre-office inet static\n" in gre
     assert "pre-up ip tunnel add $IFACE mode gre" in gre
     assert "local 198.51.100.1 remote 203.0.113.1 ttl 255" in gre
     assert "post-down ip tunnel del $IFACE || true\n" in gre
 
-    pppoe_iface = (
-        settings.sys_root / "etc/network/interfaces.d/dros-pppoe-wan.cfg"
-    ).read_text(encoding="utf-8")
+    pppoe_iface = _interface_file(settings, "pppoe-wan").read_text(encoding="utf-8")
     pppoe_peer = (settings.sys_root / "etc/ppp/peers/pppoe-wan").read_text(
         encoding="utf-8"
     )
     assert "iface pppoe-wan inet ppp\n" in pppoe_iface
+    assert "  pre-up ifup eth0.35 2>/dev/null || true\n" in pppoe_iface
     assert "  provider pppoe-wan\n" in pppoe_iface
     assert "plugin rp-pppoe.so eth0.35\n" in pppoe_peer
     assert 'user "home@example.net"\n' in pppoe_peer
     assert 'password "secret"\n' in pppoe_peer
 
-    wg_iface = (
-        settings.sys_root / "etc/network/interfaces.d/dros-wg0.cfg"
-    ).read_text(encoding="utf-8")
+    wg_iface = _interface_file(settings, "wg0").read_text(encoding="utf-8")
     wg_conf = (settings.sys_root / "etc/wireguard/wg0.conf").read_text(
         encoding="utf-8"
     )
@@ -517,6 +636,26 @@ spec:
     assert "ListenPort = 51820\n" in wg_conf
     assert "PublicKey = peer-key\n" in wg_conf
     assert "AllowedIPs = 10.20.0.2/32, fd00:20::2/128\n" in wg_conf
+
+
+def test_pppoe_interface_reload_uses_timeouts() -> None:
+    context = _FakeReloadContext()
+    config = InterfaceConfig(
+        type="pppoe",
+        device="eth0.35",
+        user="home@example.net",
+        password="secret",
+    )
+
+    _reload_ifupdown_interface(context, "pppoe-wan", config)  # type: ignore[arg-type]
+
+    assert context.calls == [
+        (
+            ["ifdown", "--force", "pppoe-wan"],
+            {"check": False, "real_only": True, "timeout": 60},
+        ),
+        (["ifup", "pppoe-wan"], {"real_only": True, "timeout": 120}),
+    ]
 
 
 def test_update_interface_writes_openvpn_files(tmp_path: Path) -> None:
@@ -548,9 +687,7 @@ spec:
 
     run_update(settings, target="iface/ovpn-lab", console=_console(StringIO()))
 
-    iface = (
-        settings.sys_root / "etc/network/interfaces.d/dros-ovpn-lab.cfg"
-    ).read_text(encoding="utf-8")
+    iface = _interface_file(settings, "ovpn-lab").read_text(encoding="utf-8")
     ovpn = (settings.sys_root / "etc/dros/openvpn/ovpn-lab.ovpn").read_text(
         encoding="utf-8"
     )

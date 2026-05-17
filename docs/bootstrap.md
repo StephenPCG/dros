@@ -27,6 +27,9 @@ any selected object is invalid.
   refresh hooks.
 - `network.firewall` owns `Firewall` objects, `/etc/nftables.conf`, and the
   generated base nftables ruleset under `/etc/dros/nftables.d`.
+- `network.dnsmasq` owns `DnsmasqDNS`, `DnsmasqDHCP`, and
+  `DnsmasqChinaNames` objects, dnsmasq include fragments, and the China Names
+  refresh cron job.
 - `ip_lists` owns `IpListUpdater` objects and the cron job that refreshes
   runtime IP list files.
 - `system.utilities` owns general troubleshooting and admin packages.
@@ -40,6 +43,16 @@ fight over the same package or file.
 The registry also keeps event hook metadata. System hooks currently enqueue
 events through `gw hook ...`; `drosd` polls the run directory queue and handles
 the event against the effective ConfigObjects loaded from `paths.configs`.
+Generated hooks do not run `gw update` inline. They append events to
+`{paths.run}/events.jsonl`, and the daemon processes the queue under a single
+process lock. Duplicate events in the same daemon polling batch are coalesced by
+`event + iface`.
+
+Every `gw` CLI invocation that can load settings writes a JSONL trace to
+`{paths.logs}/gw-invocations.log`. Event enqueue and daemon-side event
+processing are logged there too. Config-apply paths such as `gw update`,
+`gw bootstrap`, and daemon event processing use `{paths.run}/locks/gw-apply.lock`
+so only one system apply path runs at a time.
 
 ## ConfigObjects
 
@@ -63,6 +76,9 @@ The bootstrap singleton objects currently used are:
 Detailed ConfigObject references:
 
 - `docs/config-objects/DevGroup.md`
+- `docs/config-objects/DnsmasqChinaNames.md`
+- `docs/config-objects/DnsmasqDHCP.md`
+- `docs/config-objects/DnsmasqDNS.md`
 - `docs/config-objects/Firewall.md`
 - `docs/config-objects/FwMark.md`
 - `docs/config-objects/Gateway.md`
@@ -150,7 +166,8 @@ system default stays in place until a `Firewall` object is applied.
 `gw update` additionally manages files such as
 `/etc/nftables.conf`, `/etc/dros/nftables.d/10-firewall.nft`, interface-owned
 listen snippets under `/etc/dros/nftables.d/30-interface-*.nft`, and
-`/etc/iproute2/rt_tables.d/dros.conf`. Route updates are rendered to
+`/etc/iproute2/rt_tables.d/dros.conf`, plus dnsmasq include files under
+`/etc/dnsmasq.d/dros-*.conf`. Route updates are rendered to
 `{paths.run}/tmp/update-route.sh` first, then applied from that script; each
 selected route table is written through a separate `ip -batch` block.
 

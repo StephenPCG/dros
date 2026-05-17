@@ -697,7 +697,7 @@ metadata:
   name: system
 spec:
   enabled: true
-  cron: "0 1 *"
+  schedule: "0 1 *"
 """.lstrip(),
         encoding="utf-8",
     )

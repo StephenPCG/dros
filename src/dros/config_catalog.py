@@ -149,7 +149,69 @@ metadata:
   name: system
 spec:
   enabled: true
-  cron: "0 1 *"
+  schedule: "0 1 *"
+""",
+    ),
+    "DnsmasqDNS": ConfigObjectCatalogEntry(
+        kind="DnsmasqDNS",
+        example="""apiVersion: dros/v1alpha1
+kind: DnsmasqDNS
+metadata:
+  name: system
+spec:
+  interfaces:
+    - br-lan
+  listenAddresses:
+    - 10.0.0.1
+    - 127.0.0.1
+  noResolv: true
+  bogusPriv: true
+  domainNeeded: true
+  servers:
+    - 223.5.5.5
+    - /corp.example.com/10.0.0.53
+  locals:
+    - lan
+  addresses:
+    - /gateway.lan/10.0.0.1
+""",
+    ),
+    "DnsmasqDHCP": ConfigObjectCatalogEntry(
+        kind="DnsmasqDHCP",
+        example="""apiVersion: dros/v1alpha1
+kind: DnsmasqDHCP
+metadata:
+  name: system
+spec:
+  authoritative: true
+  domain: lan
+  dnsServers:
+    - 10.0.0.1
+  ranges:
+    - tag: lan
+      start: 10.0.0.100
+      end: 10.0.0.200
+      lease: 24h
+  hosts:
+    - 00:11:22:33:44:55,10.0.0.10,nas
+""",
+    ),
+    "DnsmasqChinaNames": ConfigObjectCatalogEntry(
+        kind="DnsmasqChinaNames",
+        example="""apiVersion: dros/v1alpha1
+kind: DnsmasqChinaNames
+metadata:
+  name: system
+spec:
+  servers:
+    - 114.114.114.114
+    - 223.5.5.5
+  files:
+    - accelerated-domains.china.conf
+    - bogus-nxdomain.china.conf
+  manualNames:
+    - internal.example.cn
+  schedule: "27 4 * * *"
 """,
     ),
 }

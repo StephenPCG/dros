@@ -113,6 +113,29 @@ class SystemExecutor:
             self._print(f"deleted {logical}")
         return True
 
+    def rename_file(self, old_path: str | Path, new_path: str | Path) -> bool:
+        old_target = self.target_path(old_path)
+        new_target = self.target_path(new_path)
+        old_logical = _logical_path(old_path)
+        new_logical = _logical_path(new_path)
+        if old_target == new_target:
+            return False
+        if not old_target.exists():
+            return False
+        if not old_target.is_file():
+            raise ValueError(f"managed path is not a file: {old_path}")
+        if new_target.exists():
+            raise ValueError(f"managed target already exists: {new_path}")
+
+        new_target.parent.mkdir(parents=True, exist_ok=True)
+        old_target.rename(new_target)
+
+        message = f"renamed {old_logical} -> {new_logical}"
+        self.actions.append(SystemAction(kind="rename_file", path=new_logical, message=message))
+        if self.verbose >= 1:
+            self._print(message)
+        return True
+
     def run(
         self,
         command: Sequence[str],
@@ -120,6 +143,7 @@ class SystemExecutor:
         check: bool = True,
         real_only: bool = False,
         quiet: bool = False,
+        timeout: float | None = None,
     ) -> subprocess.CompletedProcess[str] | None:
         command_list = [str(part) for part in command]
         skipped = real_only and not self.is_real_root
@@ -140,17 +164,21 @@ class SystemExecutor:
         if self.verbose >= 1 and not quiet:
             self._print(f"run: {' '.join(command_list)}")
 
-        capture_output = self.verbose < 2
-        result = self.runner(
-            command_list,
-            check=False,
-            capture_output=capture_output,
-            text=True,
-        )
-        if self.verbose >= 2 and capture_output:
-            self._print_command_output(result)
+        run_kwargs: dict[str, object] = {"check": False, "text": True}
+        if timeout is not None:
+            run_kwargs["timeout"] = timeout
+        if self.verbose < 2 or quiet:
+            run_kwargs["stdout"] = subprocess.DEVNULL
+            run_kwargs["stderr"] = subprocess.DEVNULL
+        try:
+            result = self.runner(command_list, **run_kwargs)
+        except subprocess.TimeoutExpired as exc:
+            timeout_text = _format_timeout(exc.timeout if exc.timeout is not None else timeout)
+            if self.verbose >= 1 and not quiet:
+                self._print(f"timeout: {' '.join(command_list)} after {timeout_text}")
+            raise RuntimeError(f"command timed out after {timeout_text}: {' '.join(command_list)}") from exc
         if check and result.returncode != 0:
-            if capture_output:
+            if result.stdout or result.stderr:
                 self._print_command_output(result)
             raise subprocess.CalledProcessError(
                 result.returncode,
@@ -211,14 +239,11 @@ class SystemExecutor:
         if not self.is_real_root or shutil.which("dpkg-query") is None:
             return set()
 
-        result = self.run(
+        output = self.output(
             ["dpkg-query", "-W", "-f=${binary:Package}\\n"],
-            check=False,
-            quiet=True,
+            real_only=True,
         )
-        if result is None or result.returncode != 0:
-            return set()
-        return {line.strip() for line in result.stdout.splitlines() if line.strip()}
+        return {line.strip() for line in output.splitlines() if line.strip()}
 
     def _print_diff(self, logical: str, old_content: str | None, new_content: str) -> None:
         old_lines = [] if old_content is None else old_content.splitlines(keepends=True)
@@ -244,3 +269,9 @@ class SystemExecutor:
 
 def _logical_path(path: str | Path) -> str:
     return str(Path(path))
+
+
+def _format_timeout(value: float | None) -> str:
+    if value is None:
+        return "unknown"
+    return f"{value:g}s"

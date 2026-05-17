@@ -5,7 +5,9 @@ import subprocess
 import sys
 import getpass
 import sqlite3
+import time
 from collections.abc import Sequence
+from contextlib import contextmanager
 from pathlib import Path
 
 from cyclopts import App
@@ -15,9 +17,13 @@ from dros import __version__
 from dros.bootstrap import run_bootstrap
 from dros.cli.privilege import path_writable_for_current_user, reexec_with_sudo
 from dros.cli.services import restart_local_service
+from dros.config_objects import DnsmasqChinaNamesConfig, load_config_objects
 from dros.config_catalog import render_config_object_example
+from dros.dnsmasq_china_names import DnsmasqChinaNamesUpdater
 from dros.events import enqueue_event, process_event
+from dros.invocation_log import append_invocation_log
 from dros.ip_lists import load_ip_lists, summarize_ip_lists, update_ip_lists
+from dros.locks import APPLY_LOCK_PATH, LockBusyError, exclusive_lock
 from dros.settings import DEFAULT_SETTINGS_PATH, DrosSettings, load_settings
 from dros.update import UpdateValidationError, run_update
 from dros.web.auth import WebAuthStore, resolve_auth_db_path
@@ -39,6 +45,10 @@ web_app = App(name="web", help="Web user and session administration.")
 app.command(web_app)
 ip_list_app = App(name="ip-list", help="IP list utilities.")
 app.command(ip_list_app)
+dnsmasq_app = App(name="dnsmasq", help="dnsmasq utilities.")
+app.command(dnsmasq_app)
+dnsmasq_china_names_app = App(name="china-names", help="dnsmasq China names utilities.")
+dnsmasq_app.command(dnsmasq_china_names_app)
 
 
 def _not_ready(command: str) -> None:
@@ -55,7 +65,8 @@ def bootstrap(verbose: int = 1) -> None:
     try:
         settings = _load_cli_settings()
         _ensure_bootstrap_privileges(settings)
-        run_bootstrap(settings, verbose=verbose, console=console)
+        with _manual_cli_lock(settings):
+            run_bootstrap(settings, verbose=verbose, console=console)
     except (OSError, RuntimeError, ValueError, subprocess.CalledProcessError) as exc:
         error_console.print(f"[red]bootstrap failed:[/red] {exc}")
         raise SystemExit(1) from exc
@@ -71,7 +82,8 @@ def update(target: str | None = None, verbose: int = 1) -> None:
     try:
         settings = _load_cli_settings()
         _ensure_bootstrap_privileges(settings)
-        run_update(settings, target=target, verbose=verbose, console=console)
+        with _manual_cli_lock(settings):
+            run_update(settings, target=target, verbose=verbose, console=console)
     except UpdateValidationError as exc:
         error_console.print("[red]update validation failed:[/red]")
         for error in exc.errors:
@@ -146,6 +158,55 @@ def ip_list_update(verbose: int = 1, timeout: float = 30.0) -> None:
         raise SystemExit(1)
     if verbose > 0:
         console.print("[green]ip lists updated[/green]")
+
+
+@dnsmasq_china_names_app.command(name="update")
+def dnsmasq_china_names_update(verbose: int = 1, timeout: float = 30.0) -> None:
+    """Download dnsmasq China names files."""
+    if verbose not in {0, 1, 2}:
+        error_console.print("[red]dnsmasq china-names update failed:[/red] --verbose must be 0, 1, or 2")
+        raise SystemExit(2)
+    try:
+        settings = _load_cli_settings()
+        _ensure_bootstrap_privileges(settings)
+        configs = load_config_objects(settings)
+        obj = configs.get("DnsmasqChinaNames", "system")
+        if obj is None:
+            objects = configs.by_kind("DnsmasqChinaNames")
+            obj = sorted(objects, key=lambda item: item.name)[-1] if objects else None
+        if obj is None:
+            raise ValueError("ConfigObject not found: DnsmasqChinaNames/system")
+        config = configs.resolve_object(obj, DnsmasqChinaNamesConfig)
+        if not config.enabled:
+            if verbose > 0:
+                console.print("dnsmasq China names updater is disabled")
+            return
+        manual_name_files = [
+            str(_resolve_config_relative_path(obj.source.parent, item))
+            for item in config.manual_name_files
+        ]
+        result = DnsmasqChinaNamesUpdater(timeout=timeout).update(
+            settings,
+            servers=config.servers,
+            selected_files=config.files or None,
+            manual_names=config.manual_names,
+            manual_name_files=manual_name_files,
+            verbose=verbose,
+            console=console,
+        )
+    except (OSError, RuntimeError, ValueError, subprocess.CalledProcessError) as exc:
+        error_console.print(f"[red]dnsmasq china-names update failed:[/red] {exc}")
+        raise SystemExit(1) from exc
+    for warning in result.warnings:
+        if verbose > 0:
+            console.print(f"warning: {warning}", markup=False)
+    if result.failures:
+        for failure in result.failures:
+            if verbose > 0:
+                console.print(f"failed: {failure['file']}: {failure['error']}", markup=False)
+        raise SystemExit(1)
+    if verbose > 0:
+        console.print("[green]dnsmasq China names updated[/green]")
 
 
 @web_app.command(name="create-user")
@@ -247,12 +308,37 @@ def _strip_global_options(args: list[str]) -> list[str]:
     return normalized
 
 
+def _resolve_config_relative_path(base: Path, value: str) -> Path:
+    path = Path(value).expanduser()
+    return path if path.is_absolute() else base / path
+
+
 def _load_cli_settings() -> DrosSettings:
     if _current_settings_path is not None:
         return load_settings(_current_settings_path)
     if DEFAULT_SETTINGS_PATH.exists():
         return load_settings(DEFAULT_SETTINGS_PATH)
     raise ValueError(f"default settings file not found: {DEFAULT_SETTINGS_PATH}; pass --settings")
+
+
+def _try_load_cli_settings_for_logging() -> DrosSettings | None:
+    try:
+        if _current_settings_path is not None:
+            return load_settings(_current_settings_path)
+        if DEFAULT_SETTINGS_PATH.exists():
+            return load_settings(DEFAULT_SETTINGS_PATH)
+    except (OSError, ValueError):
+        return None
+    return None
+
+
+@contextmanager
+def _manual_cli_lock(settings: DrosSettings):
+    try:
+        with exclusive_lock(settings.paths.run / APPLY_LOCK_PATH, blocking=False):
+            yield
+    except LockBusyError as exc:
+        raise RuntimeError("another manual gw command is already running") from exc
 
 
 def _ensure_bootstrap_privileges(settings: DrosSettings) -> None:
@@ -298,11 +384,26 @@ def main(argv: Sequence[str] | None = None) -> int:
     _current_raw_args = raw_args
     _current_settings_path = _extract_settings_path(raw_args)
     args = _normalize_help(_strip_global_options(raw_args))
+    log_settings = _try_load_cli_settings_for_logging()
+    started_at = time.monotonic()
+    if log_settings is not None:
+        append_invocation_log(log_settings, kind="cli", phase="start", argv=raw_args)
     try:
         app(args)
     except SystemExit as exc:
-        return int(exc.code or 0)
-    return 0
+        exit_code = int(exc.code or 0)
+    else:
+        exit_code = 0
+    if log_settings is not None:
+        append_invocation_log(
+            log_settings,
+            kind="cli",
+            phase="finish",
+            argv=raw_args,
+            exit_code=exit_code,
+            duration_ms=int((time.monotonic() - started_at) * 1000),
+        )
+    return exit_code
 
 
 if __name__ == "__main__":

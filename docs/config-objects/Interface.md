@@ -22,8 +22,13 @@
 大多数类型会生成 ifupdown 配置：
 
 ```text
-/etc/network/interfaces.d/dros-<name>.cfg
+/etc/network/interfaces.d/<NNN>-dros-<name>.cfg
 ```
+
+`NNN` 由 `network.interfaces` 根据 Interface 之间的依赖关系生成，步长为 10。当前会排序的依赖包括：
+`vlan.parent`、由 DROS 管理的 `bridge.ports`、以及由 DROS 管理的 `pppoe.device`。
+DROS 会在更新时迁移旧的 `/etc/network/interfaces.d/dros-<name>.cfg` 文件，以及旧序号的
+`*-dros-<name>.cfg` 文件，避免 ifupdown 同时读到重复配置。
 
 `pppoe` 还会生成 `/etc/ppp/peers/<name>`。`wireguard` 还会生成
 `/etc/wireguard/<name>.conf`。`openvpn` 还会生成
@@ -230,7 +235,7 @@ spec:
 
 Interface 名称，也是最终 Linux interface name。
 
-例如 `metadata.name: br0` 会生成 `/etc/network/interfaces.d/dros-br0.cfg`。
+例如 `metadata.name: br0` 可能会生成 `/etc/network/interfaces.d/010-dros-br0.cfg`。
 
 默认值：如果省略，loader 视为 `default`。实际使用中不建议省略。
 

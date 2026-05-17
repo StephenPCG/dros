@@ -13,6 +13,7 @@ from dros.plugins.base import BootstrapContext, DrosPlugin, UpdateContext
 MANAGED_FILES = frozenset(
     {
         "/etc/network/interfaces.d/dros-*.cfg",
+        "/etc/network/interfaces.d/*-dros-*.cfg",
         "/etc/ppp/ip-down.d/dros-hook",
         "/etc/ppp/ip-up.d/dros-hook",
         "/etc/ppp/ipv6-up.d/dros-hook",
@@ -25,11 +26,27 @@ MANAGED_FILES = frozenset(
     }
 )
 
+IFUPDOWN_DIR = "/etc/network/interfaces.d"
+IFUPDOWN_FILE_STEP = 10
 FIREWALL_NFT_PATH = "/etc/dros/nftables.d/10-firewall.nft"
 NFTABLES_CONF = "/etc/nftables.conf"
 NFT_FILTER_TABLE = "dros_filter"
 OPENVPN_DIR = "/etc/dros/openvpn"
 OPENVPN_HELPER = "/usr/lib/dros/openvpn-iface"
+IFUPDOWN_TYPES = frozenset(
+    {"eth", "bridge", "vlan", "loopback", "gre", "pppoe", "wireguard", "openvpn"}
+)
+INTERFACE_TYPE_ORDER = {
+    "eth": 0,
+    "bridge": 1,
+    "vlan": 2,
+    "loopback": 3,
+    "gre": 4,
+    "wireguard": 5,
+    "openvpn": 6,
+    "pppoe": 7,
+    "docker": 8,
+}
 
 
 def create_plugin() -> DrosPlugin:
@@ -59,6 +76,7 @@ def validate(context: UpdateContext, objects: list[ConfigObject]) -> list[str]:
     errors: list[str] = []
     devgroups = _devgroups(context, errors)
     interface_names = {obj.name for obj in context.configs.by_kind("Interface")}
+    selected_interface_names: set[str] = set()
 
     for obj in objects:
         if obj.kind == "DevGroup":
@@ -66,17 +84,24 @@ def validate(context: UpdateContext, objects: list[ConfigObject]) -> list[str]:
             continue
         if obj.kind != "Interface":
             continue
+        selected_interface_names.add(obj.name)
         config = _validate_model(context, obj, InterfaceConfig, errors)
         if config is None:
             continue
         errors.extend(_validate_interface(obj, config, devgroups, interface_names))
+    if selected_interface_names:
+        errors.extend(_validate_interface_dependency_graph(context, selected_interface_names))
     return errors
 
 
 def update(context: UpdateContext, objects: list[ConfigObject]) -> None:
     devgroups = _devgroups(context, [])
-    interfaces = [obj for obj in objects if obj.kind == "Interface"]
-    for obj in sorted(interfaces, key=_interface_sort_key):
+    selected_names = {obj.name for obj in objects if obj.kind == "Interface"}
+    ordered_interfaces = _interfaces_for_update_order(context, selected_names)
+    file_order = _ifupdown_file_order(ordered_interfaces)
+    for obj in ordered_interfaces:
+        if obj.name not in selected_names:
+            continue
         config = context.configs.resolve_object(obj, InterfaceConfig)
         if config.type == "docker":
             update_docker_interface(context, obj.name, config, devgroups)
@@ -84,7 +109,8 @@ def update(context: UpdateContext, objects: list[ConfigObject]) -> None:
 
         aux_changed = _write_auxiliary_files(context, obj, config, devgroups)
         nft_changed = _write_interface_nft(context, obj.name, config, devgroups)
-        path = f"/etc/network/interfaces.d/dros-{_safe_name(obj.name)}.cfg"
+        path = _interface_file_path(obj.name, file_order[obj.name])
+        _migrate_interface_file(context, obj.name, path)
         iface_changed = context.executor.write_file(
             path,
             _render_interface(context, obj.name, config, devgroups),
@@ -280,6 +306,88 @@ def _validate_model(
             location = ".".join(str(part) for part in error["loc"])
             errors.append(f"{obj.kind}/{obj.name}: spec.{location}: {error['msg']}")
         return None
+
+
+def _validate_interface_dependency_graph(
+    context: UpdateContext,
+    selected_names: set[str],
+) -> list[str]:
+    _ordered, errors = _sort_interface_objects(
+        context.configs.by_kind("Interface"),
+        roots=selected_names,
+    )
+    return errors
+
+
+def _interfaces_for_update_order(
+    context: UpdateContext,
+    selected_names: set[str],
+) -> list[ConfigObject]:
+    ordered, errors = _sort_interface_objects(context.configs.by_kind("Interface"))
+    if not errors:
+        return ordered
+
+    selected_ordered, selected_errors = _sort_interface_objects(
+        context.configs.by_kind("Interface"),
+        roots=selected_names,
+    )
+    if selected_errors:
+        raise ValueError("\n".join(selected_errors))
+    return selected_ordered
+
+
+def _ifupdown_file_order(ordered_interfaces: list[ConfigObject]) -> dict[str, int]:
+    ifupdown_interfaces = [
+        obj for obj in ordered_interfaces if _raw_interface_type(obj) in IFUPDOWN_TYPES
+    ]
+    return {obj.name: index for index, obj in enumerate(ifupdown_interfaces)}
+
+
+def _interface_file_path(name: str, order: int) -> str:
+    prefix = (order + 1) * IFUPDOWN_FILE_STEP
+    return f"{IFUPDOWN_DIR}/{prefix:03d}-dros-{_safe_name(name)}.cfg"
+
+
+def _migrate_interface_file(context: UpdateContext, name: str, desired_path: str) -> bool:
+    legacy_paths = _legacy_interface_file_paths(context, name, desired_path)
+    changed = False
+
+    if not context.executor.exists(desired_path):
+        for legacy_path in legacy_paths:
+            if context.executor.exists(legacy_path):
+                changed = context.executor.rename_file(legacy_path, desired_path) or changed
+                break
+
+    for legacy_path in legacy_paths:
+        changed = context.executor.delete_file(legacy_path) or changed
+    return changed
+
+
+def _legacy_interface_file_paths(
+    context: UpdateContext,
+    name: str,
+    desired_path: str,
+) -> list[str]:
+    safe_name = _safe_name(name)
+    paths = [f"{IFUPDOWN_DIR}/dros-{safe_name}.cfg"]
+    target_dir = context.executor.target_path(IFUPDOWN_DIR)
+    if target_dir.exists():
+        for match in sorted(target_dir.glob(f"*-dros-{safe_name}.cfg")):
+            logical = _target_to_logical_path(context, match)
+            if logical != desired_path:
+                paths.append(logical)
+
+    deduped: list[str] = []
+    for path in paths:
+        if path != desired_path and path not in deduped:
+            deduped.append(path)
+    return deduped
+
+
+def _target_to_logical_path(context: UpdateContext, target: Path) -> str:
+    if context.executor.is_real_root:
+        return str(target)
+    return "/" + str(target.relative_to(context.settings.sys_root))
 
 
 def _write_auxiliary_files(
@@ -506,6 +614,7 @@ def _render_pppoe_iface(name: str, config: InterfaceConfig) -> list[str]:
     if config.manage_device:
         lines.extend(
             [
+                f"  pre-up ifup {device} 2>/dev/null || true",
                 f"  pre-up ip link show dev {device} >/dev/null 2>&1 || "
                 f"{{ echo 'dros: pppoe device {device} for $IFACE is missing' >&2; exit 1; }}",
                 f"  pre-up ip link set dev {device} up",
@@ -737,6 +846,10 @@ def _reload_ifupdown_interface(
     if config.type == "loopback":
         context.executor.run(["ifup", name], check=False, real_only=True)
         return
+    if config.type == "pppoe":
+        context.executor.run(["ifdown", "--force", name], check=False, real_only=True, timeout=60)
+        context.executor.run(["ifup", name], real_only=True, timeout=120)
+        return
     context.executor.run(["ifdown", "--force", name], check=False, real_only=True)
     context.executor.run(["ifup", name], real_only=True)
 
@@ -749,6 +862,7 @@ def _ppp_global_hook(event: str) -> str:
             "set -eu",
             'IFACE="${1:-}"',
             '[ -n "$IFACE" ] || exit 0',
+            'case "$IFACE" in -*) exit 0 ;; esac',
             f'exec /usr/local/bin/gw hook {event} "$IFACE" --verbose 0',
             "",
         ]
@@ -953,20 +1067,88 @@ def _shell_double_quote(value: str) -> str:
     return f'"{escaped}"'
 
 
+def _sort_interface_objects(
+    interfaces: list[ConfigObject],
+    *,
+    roots: set[str] | None = None,
+) -> tuple[list[ConfigObject], list[str]]:
+    by_name = {obj.name: obj for obj in interfaces}
+    interface_names = set(by_name)
+    ordered: list[ConfigObject] = []
+    errors: list[str] = []
+    states: dict[str, str] = {}
+    stack: list[str] = []
+    reported_cycles: set[tuple[str, ...]] = set()
+
+    def visit(name: str) -> None:
+        state = states.get(name)
+        if state == "done":
+            return
+        if state == "visiting":
+            cycle = stack[stack.index(name) :] + [name]
+            marker = tuple(cycle)
+            if marker not in reported_cycles:
+                reported_cycles.add(marker)
+                errors.append(
+                    f"Interface/{cycle[0]}: dependency cycle detected: {' -> '.join(cycle)}"
+                )
+            return
+
+        obj = by_name.get(name)
+        if obj is None:
+            return
+
+        states[name] = "visiting"
+        stack.append(name)
+        for dependency in sorted(
+            _interface_dependencies(obj, interface_names),
+            key=lambda item: _interface_sort_key(by_name[item]),
+        ):
+            visit(dependency)
+        stack.pop()
+        states[name] = "done"
+        ordered.append(obj)
+
+    root_names = interface_names if roots is None else {name for name in roots if name in by_name}
+    for name in sorted(root_names, key=lambda item: _interface_sort_key(by_name[item])):
+        visit(name)
+
+    if errors:
+        return [], errors
+    return ordered, []
+
+
+def _interface_dependencies(obj: ConfigObject, interface_names: set[str]) -> list[str]:
+    dependencies: list[str] = []
+    iface_type = _raw_interface_type(obj)
+    if iface_type == "vlan":
+        _append_dependency(dependencies, obj.spec.get("parent"), interface_names)
+    elif iface_type == "bridge":
+        ports = obj.spec.get("ports")
+        if isinstance(ports, list):
+            for port in ports:
+                _append_dependency(dependencies, port, interface_names)
+    elif iface_type == "pppoe":
+        _append_dependency(dependencies, obj.spec.get("device"), interface_names)
+    return dependencies
+
+
+def _append_dependency(
+    dependencies: list[str],
+    value: object,
+    interface_names: set[str],
+) -> None:
+    if isinstance(value, str) and value in interface_names and value not in dependencies:
+        dependencies.append(value)
+
+
 def _interface_sort_key(obj: ConfigObject) -> tuple[int, str]:
-    type_order = {
-        "eth": 0,
-        "bridge": 1,
-        "vlan": 2,
-        "loopback": 3,
-        "gre": 4,
-        "wireguard": 5,
-        "openvpn": 6,
-        "pppoe": 7,
-        "docker": 8,
-    }
-    iface_type = str(obj.spec.get("type", ""))
-    return (type_order.get(iface_type, 50), obj.name)
+    return (INTERFACE_TYPE_ORDER.get(_raw_interface_type(obj), 50), obj.name)
+
+
+def _raw_interface_type(obj: ConfigObject) -> str:
+    value = obj.spec.get("type", "")
+    return value if isinstance(value, str) else ""
 
 
 def _safe_name(name: str) -> str:

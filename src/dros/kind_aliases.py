@@ -3,6 +3,17 @@ from __future__ import annotations
 KIND_ALIASES: dict[str, str] = {
     "devgroup": "DevGroup",
     "devgroups": "DevGroup",
+    "dhcp": "DnsmasqDHCP",
+    "dns": "DnsmasqDNS",
+    "dnsmasq": "Dnsmasq",
+    "chinaname": "DnsmasqChinaNames",
+    "chinanames": "DnsmasqChinaNames",
+    "dnsmasqchinaname": "DnsmasqChinaNames",
+    "dnsmasqchinanames": "DnsmasqChinaNames",
+    "dnsmasqdhcp": "DnsmasqDHCP",
+    "dnsmasqdhcps": "DnsmasqDHCP",
+    "dnsmasqdns": "DnsmasqDNS",
+    "dnsmasqdnss": "DnsmasqDNS",
     "firewall": "Firewall",
     "firewalls": "Firewall",
     "fwmark": "FwMark",
@@ -36,6 +47,7 @@ KIND_ALIASES: dict[str, str] = {
 }
 
 KIND_GROUPS: dict[str, frozenset[str]] = {
+    "Dnsmasq": frozenset({"DnsmasqDNS", "DnsmasqDHCP", "DnsmasqChinaNames"}),
     "Route": frozenset({"FwMark", "Gateway", "RouteTable", "RouteRuleSet"}),
 }
 

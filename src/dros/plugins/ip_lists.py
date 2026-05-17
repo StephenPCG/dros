@@ -29,9 +29,9 @@ def validate(context: UpdateContext, objects: list[ConfigObject]) -> list[str]:
                 errors.append(f"{obj.kind}/{obj.name}: spec.{location}: {error['msg']}")
             continue
         try:
-            _normalize_cron(config.cron)
+            normalize_schedule(config.schedule)
         except ValueError as exc:
-            errors.append(f"IpListUpdater/{obj.name}: spec.cron: {exc}")
+            errors.append(f"IpListUpdater/{obj.name}: spec.schedule: {exc}")
     return errors
 
 
@@ -53,7 +53,7 @@ def _render_cron(config: IpListUpdaterConfig) -> str:
             "SHELL=/bin/sh",
             "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
             (
-                f"{_normalize_cron(config.cron)} root "
+                f"{normalize_schedule(config.schedule)} root "
                 "/usr/local/bin/gw ip-list update --verbose 1"
             ),
             "",
@@ -61,7 +61,7 @@ def _render_cron(config: IpListUpdaterConfig) -> str:
     )
 
 
-def _normalize_cron(value: str) -> str:
+def normalize_schedule(value: str) -> str:
     parts = value.split()
     if len(parts) == 3:
         minute, hour, day_of_week = parts
