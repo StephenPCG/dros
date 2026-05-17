@@ -1,0 +1,286 @@
+from __future__ import annotations
+
+from pathlib import Path
+
+from pydantic import ValidationError
+
+from dros.config_objects import CollectdConfig, ConfigObject, ConfigStore
+from dros.plugins.base import BootstrapContext, DrosPlugin, UpdateContext
+
+COLLECTD_KIND = "Collectd"
+COLLECTD_NAME = "system"
+COLLECTD_SERVICE = "collectd.service"
+COLLECTD_CONF = "/etc/collectd/collectd.conf"
+COLLECTD_CONF_DIR = "/etc/collectd"
+PACKAGES = frozenset({"collectd", "liboping0", "lm-sensors", "rrdtool"})
+MANAGED_FILES = frozenset({COLLECTD_CONF})
+BUILTIN_COLLECTD = ConfigObject(
+    kind=COLLECTD_KIND,
+    name=COLLECTD_NAME,
+    metadata={"name": COLLECTD_NAME},
+    spec={},
+    source=Path("<builtin>"),
+)
+
+
+def create_plugin() -> DrosPlugin:
+    return DrosPlugin(
+        name="monitoring.collectd",
+        depends_on=("system.mirror",),
+        config_kinds=frozenset({COLLECTD_KIND}),
+        packages=PACKAGES,
+        managed_files=MANAGED_FILES,
+        bootstrap_hook=bootstrap,
+        validation_hook=validate,
+        update_hook=update,
+    )
+
+
+def bootstrap(context: BootstrapContext) -> None:
+    obj = _select_collectd_or_builtin(context.configs)
+    config = CollectdConfig.model_validate(obj.spec)
+    _apply_collectd(context, obj, config, install_packages=True)
+
+
+def validate(context: UpdateContext, objects: list[ConfigObject]) -> list[str]:
+    errors: list[str] = []
+    for obj in objects:
+        if obj.kind != COLLECTD_KIND:
+            continue
+        if obj.name != COLLECTD_NAME:
+            errors.append(f"{obj.kind}/{obj.name}: metadata.name must be system")
+            continue
+        try:
+            config = context.configs.resolve_object(obj, CollectdConfig)
+        except ValidationError as exc:
+            for error in exc.errors():
+                location = ".".join(str(part) for part in error["loc"])
+                errors.append(f"{obj.kind}/{obj.name}: spec.{location}: {error['msg']}")
+            continue
+        _validate_collectd(obj, config, errors)
+    return errors
+
+
+def update(context: UpdateContext, objects: list[ConfigObject]) -> None:
+    for obj in sorted(objects, key=lambda item: item.name):
+        config = context.configs.resolve_object(obj, CollectdConfig)
+        _apply_collectd(context, obj, config, install_packages=False)
+
+
+def _apply_collectd(
+    context: BootstrapContext | UpdateContext,
+    obj: ConfigObject,
+    config: CollectdConfig,
+    *,
+    install_packages: bool,
+) -> None:
+    context.executor.ensure_dir(COLLECTD_CONF_DIR)
+    if config.enabled:
+        context.executor.ensure_dir(config.rrd_dir)
+
+    config_changed = context.executor.write_file(COLLECTD_CONF, _render_collectd_config(obj, config))
+    installed = context.executor.install_missing_packages(PACKAGES) if install_packages else []
+
+    if not config.enabled:
+        if config_changed or installed:
+            context.executor.run(["systemctl", "disable", "--now", COLLECTD_SERVICE], real_only=True)
+        return
+
+    if config_changed or installed:
+        context.executor.run(["systemctl", "restart", COLLECTD_SERVICE], real_only=True)
+        context.executor.run(["systemctl", "enable", COLLECTD_SERVICE], real_only=True)
+
+
+def _select_collectd_or_builtin(configs: ConfigStore) -> ConfigObject:
+    objects = configs.by_kind(COLLECTD_KIND)
+    if not objects:
+        return BUILTIN_COLLECTD
+
+    system = [obj for obj in objects if obj.name == COLLECTD_NAME]
+    if system:
+        return system[-1]
+    if len(objects) == 1:
+        obj = objects[0]
+        raise ValueError(f"{obj.kind}/{obj.name}: metadata.name must be system")
+    names = ", ".join(sorted(obj.name for obj in objects))
+    raise ValueError(f"multiple Collectd configs found; expected only Collectd/system: {names}")
+
+
+def _validate_collectd(
+    obj: ConfigObject,
+    config: CollectdConfig,
+    errors: list[str],
+) -> None:
+    for label, value in (
+        ("spec.rrdDir", config.rrd_dir),
+        ("spec.unixSockPath", config.unix_sock_path),
+    ):
+        _validate_single_line(obj, label, value, errors)
+        if not Path(value).is_absolute():
+            errors.append(f"{obj.kind}/{obj.name}: {label} must be an absolute path")
+
+    for index, value in enumerate(config.plugins.interface.ignore):
+        _validate_single_line(obj, f"spec.plugins.interface.ignore[{index}]", value, errors)
+    for index, value in enumerate(config.plugins.ping.hosts):
+        _validate_single_line(obj, f"spec.plugins.ping.hosts[{index}]", value, errors)
+    for index, value in enumerate(config.raw):
+        _validate_single_line(obj, f"spec.raw[{index}]", value, errors)
+
+
+def _validate_single_line(
+    obj: ConfigObject,
+    label: str,
+    value: object,
+    errors: list[str],
+) -> None:
+    if any(char in str(value) for char in "\r\n"):
+        errors.append(f"{obj.kind}/{obj.name}: {label} must be a single-line value")
+
+
+def _render_collectd_config(obj: ConfigObject, config: CollectdConfig) -> str:
+    lines = [
+        "# Generated by DROS. Manual changes will be overwritten.",
+        f"# Resource: {obj.kind}/{obj.name}",
+        "",
+    ]
+    if not config.enabled:
+        lines.extend(["# disabled", ""])
+        return "\n".join(lines)
+
+    lines.extend(
+        [
+            "FQDNLookup true",
+            f"Interval {config.interval}",
+            "",
+            "LoadPlugin syslog",
+            "<Plugin syslog>",
+            "    LogLevel info",
+            "</Plugin>",
+            "",
+            "LoadPlugin conntrack",
+            "LoadPlugin contextswitch",
+            "",
+            "LoadPlugin cpu",
+            "<Plugin cpu>",
+            "    ReportByCpu true",
+            "    ReportByState true",
+            "    ValuesPercentage true",
+            "</Plugin>",
+            "",
+            "LoadPlugin df",
+            "<Plugin df>",
+            "    FSType autofs",
+            "    FSType binfmt_misc",
+            "    FSType bpf",
+            "    FSType cgroup",
+            "    FSType cgroup2",
+            "    FSType configfs",
+            "    FSType debugfs",
+            "    FSType devpts",
+            "    FSType devtmpfs",
+            "    FSType efivarfs",
+            "    FSType fusectl",
+            "    FSType hugetlbfs",
+            "    FSType mqueue",
+            "    FSType nfs4",
+            "    FSType nsfs",
+            "    FSType overlay",
+            "    FSType proc",
+            "    FSType pstore",
+            "    FSType rootfs",
+            "    FSType securityfs",
+            "    FSType sysfs",
+            "    FSType tmpfs",
+            "    FSType tracefs",
+            "    IgnoreSelected true",
+            "",
+            "    ValuesAbsolute true",
+            "    ValuesPercentage true",
+            "</Plugin>",
+            "",
+            "LoadPlugin disk",
+            "LoadPlugin entropy",
+        ]
+    )
+
+    if config.plugins.interface.enabled:
+        lines.append("LoadPlugin interface")
+        if config.plugins.interface.ignore:
+            lines.extend(
+                [
+                    "<Plugin interface>",
+                    *[
+                        f'    Interface "{_escape_collectd_string(item)}"'
+                        for item in config.plugins.interface.ignore
+                    ],
+                    "    IgnoreSelected true",
+                    "</Plugin>",
+                ]
+            )
+        lines.append("")
+
+    lines.extend(
+        [
+            "LoadPlugin irq",
+            "LoadPlugin load",
+            "",
+            "LoadPlugin memory",
+            "<Plugin memory>",
+            "    ValuesAbsolute true",
+            "    ValuesPercentage true",
+            "</Plugin>",
+            "",
+        ]
+    )
+
+    if config.plugins.ping.enabled and config.plugins.ping.hosts:
+        lines.extend(
+            [
+                "LoadPlugin ping",
+                "<Plugin ping>",
+                *[
+                    f'    Host "{_escape_collectd_string(host)}"'
+                    for host in config.plugins.ping.hosts
+                ],
+                "    Timeout 0.9",
+                "    TTL 255",
+                "</Plugin>",
+                "",
+            ]
+        )
+
+    lines.extend(
+        [
+            "LoadPlugin processes",
+            "",
+            "LoadPlugin rrdtool",
+            "<Plugin rrdtool>",
+            f'    DataDir "{_escape_collectd_string(config.rrd_dir)}"',
+            "</Plugin>",
+            "",
+        ]
+    )
+
+    if config.unix_sock:
+        lines.extend(
+            [
+                "LoadPlugin unixsock",
+                "<Plugin unixsock>",
+                f'    SocketFile "{_escape_collectd_string(config.unix_sock_path)}"',
+                '    SocketPerms "0660"',
+                "    DeleteSocket true",
+                "</Plugin>",
+                "",
+            ]
+        )
+
+    lines.extend(["LoadPlugin uptime", "LoadPlugin users", ""])
+    if config.plugins.sensors.enabled:
+        lines.extend(["LoadPlugin sensors", ""])
+    lines.extend(config.raw)
+    lines.append("")
+    return "\n".join(lines)
+
+
+def _escape_collectd_string(value: str) -> str:
+    return value.replace("\\", "\\\\").replace('"', '\\"')

@@ -114,6 +114,20 @@ def test_config_create_accepts_docker_aliases(capsys) -> None:
     assert "kind: DockerApp" in output
     assert "app: nginx" in output
 
+    assert cli_main.main(["config", "create", "docker-dns"]) == 0
+    output = capsys.readouterr().out
+    assert "kind: DockerDNS" in output
+    assert "hostNetworkAddress" in output
+
+
+def test_config_create_accepts_collectd_alias(capsys) -> None:
+    assert cli_main.main(["config", "create", "collectd"]) == 0
+
+    output = capsys.readouterr().out
+    assert "kind: Collectd" in output
+    assert "name: system" in output
+    assert "ping:" in output
+
 
 def test_update_command_loads_settings_and_runs_update(monkeypatch, tmp_path: Path) -> None:
     settings_file = tmp_path / "settings.yaml"

@@ -33,8 +33,14 @@ any selected object is invalid.
 - `ip_lists` owns `IpListUpdater` objects and the cron job that refreshes
   runtime IP list files.
 - `system.utilities` owns general troubleshooting and admin packages.
+- `monitoring.collectd` owns `Collectd` objects, the local collectd package
+  set, `/etc/collectd/collectd.conf`, and `collectd.service` restart/enable
+  actions when the rendered config changes.
 - `docker.core` owns Docker packages, `/etc/docker/daemon.json`, and the Docker
   service post-start hook.
+- `docker.resources` owns `DockerContainer`, `DockerApp`, and `DockerDNS`
+  objects, compose project files under `/opt/gateway/containers`, and optional
+  dnsmasq records for Docker containers.
 
 Plugins declare their owned system packages and managed files. The registry
 rejects duplicate ownership so later work cannot accidentally make two plugins
@@ -72,12 +78,18 @@ The bootstrap singleton objects currently used are:
   - `aptMirror`, default `https://mirrors.ustc.edu.cn/debian`
   - `dockerAptMirror`, default `https://mirrors.ustc.edu.cn/docker-ce`
   - `dockerRegistryMirror`, default empty
+- `Collectd`, fixed name `system`
+  - `interval`, default `10`
+  - `rrdDir`, default `/var/lib/collectd/rrd`
+  - `plugins.ping.hosts`, default empty
 
 Detailed ConfigObject references:
 
+- `docs/config-objects/Collectd.md`
 - `docs/config-objects/DevGroup.md`
 - `docs/config-objects/DockerApp.md`
 - `docs/config-objects/DockerContainer.md`
+- `docs/config-objects/DockerDNS.md`
 - `docs/config-objects/DnsmasqChinaNames.md`
 - `docs/config-objects/DnsmasqDHCP.md`
 - `docs/config-objects/DnsmasqDNS.md`

@@ -275,6 +275,59 @@ class DnsmasqChinaNamesConfig(BaseModel):
     command: str | None = None
 
 
+class CollectdInterfacePluginConfig(BaseModel):
+    model_config = ConfigDict(extra="ignore", populate_by_name=True)
+
+    enabled: bool = True
+    ignore: list[str] = Field(default_factory=lambda: ["/^veth/"])
+
+
+class CollectdPingPluginConfig(BaseModel):
+    model_config = ConfigDict(extra="ignore", populate_by_name=True)
+
+    enabled: bool = False
+    hosts: list[str] = Field(default_factory=list)
+
+
+class CollectdSensorsPluginConfig(BaseModel):
+    model_config = ConfigDict(extra="ignore", populate_by_name=True)
+
+    enabled: bool = False
+
+
+class CollectdPluginsConfig(BaseModel):
+    model_config = ConfigDict(extra="ignore", populate_by_name=True)
+
+    interface: CollectdInterfacePluginConfig = Field(
+        default_factory=CollectdInterfacePluginConfig
+    )
+    ping: CollectdPingPluginConfig = Field(default_factory=CollectdPingPluginConfig)
+    sensors: CollectdSensorsPluginConfig = Field(
+        default_factory=CollectdSensorsPluginConfig
+    )
+
+
+class CollectdConfig(BaseModel):
+    model_config = ConfigDict(extra="ignore", populate_by_name=True)
+
+    enabled: bool = True
+    interval: int = Field(10, ge=1)
+    rrd_dir: str = Field(
+        "/var/lib/collectd/rrd",
+        validation_alias=AliasChoices("rrd_dir", "rrdDir"),
+    )
+    unix_sock: bool = Field(
+        True,
+        validation_alias=AliasChoices("unix_sock", "unixSock"),
+    )
+    unix_sock_path: str = Field(
+        "/run/collectd-unixsock",
+        validation_alias=AliasChoices("unix_sock_path", "unixSockPath"),
+    )
+    plugins: CollectdPluginsConfig = Field(default_factory=CollectdPluginsConfig)
+    raw: list[str] = Field(default_factory=list)
+
+
 class DockerMountConfig(BaseModel):
     model_config = ConfigDict(extra="ignore", populate_by_name=True)
 
@@ -373,6 +426,22 @@ class DockerAppConfig(BaseModel):
     additional_domains: list[str] = Field(
         default_factory=list,
         validation_alias=AliasChoices("additional_domains", "additionalDomains"),
+    )
+
+
+class DockerDNSConfig(BaseModel):
+    model_config = ConfigDict(extra="ignore", populate_by_name=True)
+
+    enabled: bool = True
+    suffix: str = "containers.lan"
+    file: str = "/etc/dnsmasq.d/dros-40-containers.conf"
+    host_network_address: str | None = Field(
+        None,
+        validation_alias=AliasChoices("host_network_address", "hostNetworkAddress"),
+    )
+    host_network_addresses: dict[str, str] = Field(
+        default_factory=dict,
+        validation_alias=AliasChoices("host_network_addresses", "hostNetworkAddresses"),
     )
 
 

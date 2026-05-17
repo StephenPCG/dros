@@ -152,6 +152,18 @@ compose restart policy。
 
 默认值：无。
 
+### `spec.dnsNames`
+
+Docker DNS 名称列表。设置后会替换默认 `<metadata.name>.<DockerDNS.spec.suffix>`。
+
+默认值：`[]`。
+
+### `spec.additionalDomains`
+
+额外完整域名列表，会追加到 Docker DNS 记录中，不自动追加 suffix。
+
+默认值：`[]`。
+
 ## `mounts[]`
 
 - `sourceType`：必填。可选 `inline`、`file`、`dir`、`data-dir`

@@ -7,6 +7,7 @@ import pytest
 import yaml
 from rich.console import Console
 
+from dros.plugins import docker_resources
 from dros.settings import DrosPaths, DrosSettings
 from dros.update import UpdateValidationError, run_update
 
@@ -161,26 +162,37 @@ metadata:
   name: certimate
 spec:
   app: certimate
+  environment:
+    TZ: UTC
 """.lstrip(),
         encoding="utf-8",
     )
 
     run_update(settings, target="docker-apps", console=_console(StringIO()))
 
-    assert _compose(settings, "vlmcsd")["services"]["app"]["image"] == "mikolatero/vlmcsd:latest"
+    vlmcsd_service = _compose(settings, "vlmcsd")["services"]["app"]
+    assert vlmcsd_service["image"] == "mikolatero/vlmcsd:latest"
+    assert vlmcsd_service["network_mode"] == "bridge"
+    assert vlmcsd_service["environment"] == {"TZ": "Asia/Shanghai"}
     nginx_service = _compose(settings, "nginx")["services"]["app"]
     assert nginx_service["image"] == "nginx:1.30-alpine"
     assert nginx_service["network_mode"] == "host"
+    assert nginx_service["environment"] == {"TZ": "Asia/Shanghai"}
     assert nginx_service["volumes"] == [
         "/opt/gateway/containers/nginx/generated/inline/nginx.conf:/etc/nginx/nginx.conf:ro"
     ]
     ddns_service = _compose(settings, "ddns-go")["services"]["app"]
     assert ddns_service["network_mode"] == "bridge"
+    assert ddns_service["environment"] == {"TZ": "Asia/Shanghai"}
     assert "/opt/gateway/containers/ddns-go/data:/root:rw" in ddns_service["volumes"]
-    unifi_volumes = _compose(settings, "unifi")["services"]["app"]["volumes"]
-    assert "/opt/gateway/containers/unifi/data:/usr/lib/unifi/data:rw" in unifi_volumes
+    unifi_service = _compose(settings, "unifi")["services"]["app"]
+    assert unifi_service["network_mode"] == "bridge"
+    assert unifi_service["environment"] == {"TZ": "Asia/Shanghai"}
+    assert "/opt/gateway/containers/unifi/data:/usr/lib/unifi/data:rw" in unifi_service["volumes"]
     certimate_service = _compose(settings, "certimate")["services"]["app"]
     assert certimate_service["image"] == "certimate/certimate:latest"
+    assert certimate_service["network_mode"] == "bridge"
+    assert certimate_service["environment"] == {"TZ": "UTC"}
     assert "/opt/gateway/containers/certimate/data:/app/pb_data:rw" in certimate_service["volumes"]
 
 
@@ -200,3 +212,76 @@ spec:
 
     with pytest.raises(UpdateValidationError, match="collectd"):
         run_update(settings, target="docker-app/collectd", console=_console(StringIO()))
+
+
+def test_update_docker_dns_writes_container_and_host_network_records(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    settings = _settings(tmp_path)
+    settings.paths.configs.mkdir(parents=True)
+    (settings.paths.configs / "docker.yaml").write_text(
+        """
+kind: DockerDNS
+metadata:
+  name: system
+spec:
+  suffix: containers.test
+  hostNetworkAddress: 10.0.0.1
+---
+kind: DockerContainer
+metadata:
+  name: web-demo
+spec:
+  image: nginx:stable-alpine
+  network: default
+  dnsNames:
+    - web.containers.test
+  additionalDomains:
+    - web.home.test
+---
+kind: DockerApp
+metadata:
+  name: nginx
+spec:
+  app: nginx
+  network: host
+  dnsNames:
+    - nginx.containers.test
+""".lstrip(),
+        encoding="utf-8",
+    )
+
+    def fake_inspect_address(_context: object, project: object) -> str | None:
+        assert getattr(project, "name") == "web-demo"
+        return "172.17.0.9"
+
+    monkeypatch.setattr(docker_resources, "_inspect_container_address", fake_inspect_address)
+
+    result = run_update(settings, target="docker", console=_console(StringIO()))
+
+    content = (settings.sys_root / "etc/dnsmasq.d/dros-40-containers.conf").read_text(
+        encoding="utf-8"
+    )
+    assert "host-record=web.containers.test,172.17.0.9" in content
+    assert "host-record=web.home.test,172.17.0.9" in content
+    assert "host-record=nginx.containers.test,10.0.0.1" in content
+    assert any(command == "systemctl restart dnsmasq" for command in _commands(result))
+
+
+def test_update_docker_dns_rejects_relative_file(tmp_path: Path) -> None:
+    settings = _settings(tmp_path)
+    settings.paths.configs.mkdir(parents=True)
+    (settings.paths.configs / "docker-dns.yaml").write_text(
+        """
+kind: DockerDNS
+metadata:
+  name: system
+spec:
+  file: var/lib/dnsmasq/docker.conf
+""".lstrip(),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(UpdateValidationError, match="spec.file must be an absolute path"):
+        run_update(settings, target="docker-dns", console=_console(StringIO()))

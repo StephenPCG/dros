@@ -144,6 +144,8 @@ class SystemExecutor:
         real_only: bool = False,
         quiet: bool = False,
         timeout: float | None = None,
+        env: dict[str, str] | None = None,
+        stdin: object | None = None,
     ) -> subprocess.CompletedProcess[str] | None:
         command_list = [str(part) for part in command]
         skipped = real_only and not self.is_real_root
@@ -167,6 +169,10 @@ class SystemExecutor:
         run_kwargs: dict[str, object] = {"check": False, "text": True}
         if timeout is not None:
             run_kwargs["timeout"] = timeout
+        if env is not None:
+            run_kwargs["env"] = {**os.environ, **env}
+        if stdin is not None:
+            run_kwargs["stdin"] = stdin
         if self.verbose < 2 or quiet:
             run_kwargs["stdout"] = subprocess.DEVNULL
             run_kwargs["stderr"] = subprocess.DEVNULL
@@ -228,9 +234,28 @@ class SystemExecutor:
             return []
 
         if not self._apt_updated:
-            self.run(["apt-get", "update"], real_only=True)
+            self.run(
+                ["apt-get", "update"],
+                real_only=True,
+                env=_apt_noninteractive_env(),
+                stdin=subprocess.DEVNULL,
+            )
             self._apt_updated = True
-        self.run(["apt-get", "install", "-y", *missing], real_only=True)
+        self.run(
+            [
+                "apt-get",
+                "-o",
+                "Dpkg::Options::=--force-confdef",
+                "-o",
+                "Dpkg::Options::=--force-confold",
+                "install",
+                "-y",
+                *missing,
+            ],
+            real_only=True,
+            env=_apt_noninteractive_env(),
+            stdin=subprocess.DEVNULL,
+        )
         return missing
 
     def installed_packages(self) -> set[str]:
@@ -269,6 +294,15 @@ class SystemExecutor:
 
 def _logical_path(path: str | Path) -> str:
     return str(Path(path))
+
+
+def _apt_noninteractive_env() -> dict[str, str]:
+    return {
+        "APT_LISTCHANGES_FRONTEND": "none",
+        "DEBIAN_FRONTEND": "noninteractive",
+        "NEEDRESTART_MODE": "a",
+        "UCF_FORCE_CONFOLD": "1",
+    }
 
 
 def _format_timeout(value: float | None) -> str:

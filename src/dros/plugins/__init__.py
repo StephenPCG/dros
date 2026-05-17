@@ -4,6 +4,7 @@ from __future__ import annotations
 from dros.plugins.base import PluginRegistry
 
 from . import (
+    collectd,
     dnsmasq,
     docker_core,
     docker_resources,
@@ -27,6 +28,7 @@ def create_default_registry() -> PluginRegistry:
     registry.register(dnsmasq.create_plugin())
     registry.register(ip_lists.create_plugin())
     registry.register(system_utilities.create_plugin())
+    registry.register(collectd.create_plugin())
     registry.register(docker_core.create_plugin())
     registry.register(docker_resources.create_plugin())
     return registry

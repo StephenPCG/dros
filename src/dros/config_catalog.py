@@ -214,6 +214,22 @@ spec:
   schedule: "27 4 * * *"
 """,
     ),
+    "Collectd": ConfigObjectCatalogEntry(
+        kind="Collectd",
+        example="""apiVersion: dros/v1alpha1
+kind: Collectd
+metadata:
+  name: system
+spec:
+  interval: 10
+  plugins:
+    ping:
+      enabled: true
+      hosts:
+        - 1.1.1.1
+        - 8.8.8.8
+""",
+    ),
     "DockerContainer": ConfigObjectCatalogEntry(
         kind="DockerContainer",
         example="""apiVersion: dros/v1alpha1
@@ -255,6 +271,19 @@ spec:
       http {
         include /etc/nginx/conf.d/*.conf;
       }
+""",
+    ),
+    "DockerDNS": ConfigObjectCatalogEntry(
+        kind="DockerDNS",
+        example="""apiVersion: dros/v1alpha1
+kind: DockerDNS
+metadata:
+  name: system
+spec:
+  enabled: true
+  suffix: containers.lan
+  file: /etc/dnsmasq.d/dros-40-containers.conf
+  hostNetworkAddress: 10.0.0.1
 """,
     ),
 }

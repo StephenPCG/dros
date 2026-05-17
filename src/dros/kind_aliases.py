@@ -8,6 +8,8 @@ KIND_ALIASES: dict[str, str] = {
     "dnsmasq": "Dnsmasq",
     "chinaname": "DnsmasqChinaNames",
     "chinanames": "DnsmasqChinaNames",
+    "collectd": "Collectd",
+    "collectds": "Collectd",
     "dnsmasqchinaname": "DnsmasqChinaNames",
     "dnsmasqchinanames": "DnsmasqChinaNames",
     "dnsmasqdhcp": "DnsmasqDHCP",
@@ -20,6 +22,8 @@ KIND_ALIASES: dict[str, str] = {
     "dockerapps": "DockerApp",
     "dockercontainer": "DockerContainer",
     "dockercontainers": "DockerContainer",
+    "dockerdns": "DockerDNS",
+    "dockerdnss": "DockerDNS",
     "firewall": "Firewall",
     "firewalls": "Firewall",
     "fwmark": "FwMark",
@@ -53,7 +57,7 @@ KIND_ALIASES: dict[str, str] = {
 }
 
 KIND_GROUPS: dict[str, frozenset[str]] = {
-    "Docker": frozenset({"DockerContainer", "DockerApp"}),
+    "Docker": frozenset({"DockerContainer", "DockerApp", "DockerDNS"}),
     "Dnsmasq": frozenset({"DnsmasqDNS", "DnsmasqDHCP", "DnsmasqChinaNames"}),
     "Route": frozenset({"FwMark", "Gateway", "RouteTable", "RouteRuleSet"}),
 }

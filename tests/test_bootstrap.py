@@ -154,12 +154,16 @@ def test_bootstrap_installs_only_missing_packages(tmp_path: Path) -> None:
         installed_packages=installed_packages,
     )
 
-    install_commands = [action.command for action in result.actions if action.kind == "run_command"]
-    flat_commands = [" ".join(command or []) for command in install_commands]
-    assert any("apt-get install -y" in command and "bridge-utils" in command for command in flat_commands)
-    assert any("apt-get install -y" in command and "dnsmasq" in command for command in flat_commands)
-    assert any("apt-get install -y docker-ce" in command for command in flat_commands)
-    assert not any("apt-get install -y curl" in command for command in flat_commands)
+    install_commands = [
+        action.command or []
+        for action in result.actions
+        if action.kind == "run_command" and action.command and "install" in action.command
+    ]
+    assert any("bridge-utils" in command for command in install_commands)
+    assert any("dnsmasq" in command for command in install_commands)
+    assert any("docker-ce" in command for command in install_commands)
+    assert not any("curl" in command for command in install_commands)
+    assert all("Dpkg::Options::=--force-confold" in command for command in install_commands)
 
 
 def test_bootstrap_disables_cloud_init_hosts_management_when_cloud_init_exists(

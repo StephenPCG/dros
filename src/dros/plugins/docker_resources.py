@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -14,12 +15,14 @@ from dros.config_objects import (
     DockerAppFileConfig,
     DockerAppNginxConfFileConfig,
     DockerContainerConfig,
+    DockerDNSConfig,
     DockerMountConfig,
     InterfaceConfig,
 )
 from dros.plugins.base import DrosPlugin, UpdateContext
 
-DOCKER_KINDS = frozenset({"DockerContainer", "DockerApp"})
+DOCKER_RESOURCE_KINDS = frozenset({"DockerContainer", "DockerApp"})
+DOCKER_KINDS = frozenset({"DockerContainer", "DockerApp", "DockerDNS"})
 NGINX_VARIANT_IMAGES = {
     "openresty": ("openresty/openresty", "1.29.2.3-alpine-apk"),
     "nginx": ("nginx", "1.30-alpine"),
@@ -36,6 +39,7 @@ APP_IMAGES = {
 }
 MANAGED_FILES = frozenset(
     {
+        "/etc/dnsmasq.d/dros-40-containers.conf",
         "/opt/gateway/containers/*/docker-compose.yml",
         "/opt/gateway/containers/*/generated/*",
     }
@@ -63,6 +67,8 @@ class ComposeProject:
     devices: list[str] = field(default_factory=list)
     privileged: bool = False
     command: str | list[str] | None = None
+    dns_names: list[str] = field(default_factory=list)
+    additional_domains: list[str] = field(default_factory=list)
 
 
 def create_plugin() -> DrosPlugin:
@@ -87,23 +93,46 @@ def validate(context: UpdateContext, objects: list[ConfigObject]) -> list[str]:
             config = _validate_model(context, obj, DockerAppConfig, errors)
             if config is not None:
                 _validate_app(context, obj, config, errors)
+        elif obj.kind == "DockerDNS":
+            config = _validate_model(context, obj, DockerDNSConfig, errors)
+            if config is not None:
+                _validate_docker_dns(obj, config, errors)
     return errors
 
 
 def update(context: UpdateContext, objects: list[ConfigObject]) -> None:
-    for obj in sorted(objects, key=lambda item: (item.kind, item.name)):
+    resource_objects = [obj for obj in objects if obj.kind in DOCKER_RESOURCE_KINDS]
+    dns_objects = [obj for obj in objects if obj.kind == "DockerDNS"]
+
+    for obj in sorted(resource_objects, key=lambda item: (item.kind, item.name)):
         project = _project_from_object(context, obj)
         if project is None:
             continue
         _apply_project(context, project)
 
+    if dns_objects:
+        for obj in sorted(dns_objects, key=lambda item: item.name):
+            _apply_docker_dns(context, obj)
+    elif resource_objects:
+        dns_obj = context.configs.get("DockerDNS", "system")
+        if dns_obj is not None:
+            _apply_docker_dns(context, dns_obj)
+
+
+def handle_event(context: UpdateContext, event: str, _iface: str | None = None) -> None:
+    if event != "docker-start":
+        return
+    dns_obj = context.configs.get("DockerDNS", "system")
+    if dns_obj is not None:
+        _apply_docker_dns(context, dns_obj)
+
 
 def _validate_model(
     context: UpdateContext,
     obj: ConfigObject,
-    model_type: type[DockerContainerConfig] | type[DockerAppConfig],
+    model_type: type[DockerContainerConfig] | type[DockerAppConfig] | type[DockerDNSConfig],
     errors: list[str],
-) -> DockerContainerConfig | DockerAppConfig | None:
+) -> DockerContainerConfig | DockerAppConfig | DockerDNSConfig | None:
     try:
         return context.configs.resolve_object(obj, model_type)
     except ValidationError as exc:
@@ -180,6 +209,26 @@ def _validate_common_container_fields(
     elif isinstance(config.command, list):
         for index, value in enumerate(config.command):
             _validate_single_line(obj, f"spec.command[{index}]", value, errors)
+
+
+def _validate_docker_dns(
+    obj: ConfigObject,
+    config: DockerDNSConfig,
+    errors: list[str],
+) -> None:
+    if obj.name != "system":
+        errors.append(f"{obj.kind}/{obj.name}: metadata.name must be system")
+    for label, value in (
+        ("spec.suffix", config.suffix),
+        ("spec.file", config.file),
+        ("spec.hostNetworkAddress", config.host_network_address),
+    ):
+        if value is not None:
+            _validate_single_line(obj, label, value, errors)
+    if not Path(config.file).is_absolute():
+        errors.append(f"{obj.kind}/{obj.name}: spec.file must be an absolute path")
+    for key, value in config.host_network_addresses.items():
+        _validate_single_line(obj, f"spec.hostNetworkAddresses.{key}", value, errors)
 
 
 def _validate_resource_name(obj: ConfigObject, errors: list[str]) -> None:
@@ -293,6 +342,8 @@ def _project_from_object(context: UpdateContext, obj: ConfigObject) -> ComposePr
             devices=list(config.devices),
             privileged=config.privileged,
             command=config.command,
+            dns_names=list(config.dns_names),
+            additional_domains=list(config.additional_domains),
         )
     if obj.kind == "DockerApp":
         config = context.configs.resolve_object(obj, DockerAppConfig)
@@ -342,8 +393,10 @@ def _app_project(obj: ConfigObject, config: DockerAppConfig) -> ComposeProject:
         name=obj.name,
         image=_app_image(config),
         network=config.network,
-        environment=dict(config.environment),
+        environment={"TZ": "Asia/Shanghai", **dict(config.environment)},
         mounts=mounts,
+        dns_names=list(config.dns_names),
+        additional_domains=list(config.additional_domains),
     )
 
 
@@ -442,6 +495,108 @@ def _apply_project(context: UpdateContext, project: ComposeProject) -> None:
             ],
             real_only=True,
         )
+
+
+def _apply_docker_dns(context: UpdateContext, obj: ConfigObject) -> None:
+    config = context.configs.resolve_object(obj, DockerDNSConfig)
+    if not config.enabled:
+        if context.executor.delete_file(config.file):
+            context.executor.run(["systemctl", "restart", "dnsmasq"], real_only=True)
+        return
+
+    records = _docker_dns_records(context, config)
+    changed = context.executor.write_file(config.file, _render_dnsmasq_records(records))
+    if changed:
+        context.executor.run(["systemctl", "restart", "dnsmasq"], real_only=True)
+
+
+def _docker_dns_records(
+    context: UpdateContext,
+    config: DockerDNSConfig,
+) -> list[tuple[str, str]]:
+    records: list[tuple[str, str]] = []
+    for project in _all_projects(context):
+        if project.network == "host":
+            address = config.host_network_addresses.get(project.name) or config.host_network_address
+            if not address:
+                _warn(context, f"DockerDNS: skip host network container {project.name}: no host network address")
+                continue
+        else:
+            address = _inspect_container_address(context, project)
+            if not address:
+                _warn(context, f"DockerDNS: skip container {project.name}: no Docker IP address")
+                continue
+        for name in _docker_dns_names(project, config.suffix):
+            records.append((name, address))
+    return sorted(set(records))
+
+
+def _all_projects(context: UpdateContext) -> list[ComposeProject]:
+    projects: list[ComposeProject] = []
+    for obj in sorted(context.configs.objects(), key=lambda item: (item.kind, item.name)):
+        if obj.kind not in DOCKER_RESOURCE_KINDS:
+            continue
+        try:
+            project = _project_from_object(context, obj)
+        except Exception as exc:
+            _warn(context, f"DockerDNS: skip {obj.kind}/{obj.name}: {exc}")
+            continue
+        if project is not None:
+            projects.append(project)
+    return projects
+
+
+def _inspect_container_address(context: UpdateContext, project: ComposeProject) -> str | None:
+    output = context.executor.output(["docker", "inspect", project.name], default="", real_only=True)
+    if not output:
+        return None
+    try:
+        payload = json.loads(output)
+    except json.JSONDecodeError as exc:
+        _warn(context, f"DockerDNS: docker inspect {project.name} returned invalid JSON: {exc}")
+        return None
+    if not payload:
+        return None
+    item = payload[0] if isinstance(payload, list) else payload
+    if not isinstance(item, dict):
+        return None
+    return _inspect_ip_address(item)
+
+
+def _inspect_ip_address(item: dict[str, Any]) -> str | None:
+    settings = item.get("NetworkSettings") or {}
+    if isinstance(settings, dict):
+        if settings.get("IPAddress"):
+            return str(settings["IPAddress"])
+        networks = settings.get("Networks") or {}
+        if isinstance(networks, dict):
+            bridge = networks.get("bridge") or {}
+            if isinstance(bridge, dict) and bridge.get("IPAddress"):
+                return str(bridge["IPAddress"])
+            for network in networks.values():
+                if isinstance(network, dict) and network.get("IPAddress"):
+                    return str(network["IPAddress"])
+    return None
+
+
+def _docker_dns_names(project: ComposeProject, suffix: str) -> list[str]:
+    return [*(project.dns_names or [f"{project.name}.{suffix}"]), *project.additional_domains]
+
+
+def _render_dnsmasq_records(records: list[tuple[str, str]]) -> str:
+    lines = [
+        "# Generated by DROS. Manual changes will be overwritten.",
+        "# Docker container DNS records",
+    ]
+    for name, address in records:
+        lines.append(f"host-record={name},{address}")
+    lines.append("")
+    return "\n".join(lines)
+
+
+def _warn(context: UpdateContext, message: str) -> None:
+    if context.executor.verbose >= 1:
+        context.executor.console.print(f"warning: {message}", markup=False)
 
 
 def _render_project(context: UpdateContext, project: ComposeProject) -> dict[str, Any]:
