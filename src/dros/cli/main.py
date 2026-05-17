@@ -10,6 +10,7 @@ from collections.abc import Sequence
 from contextlib import contextmanager
 from pathlib import Path
 
+import yaml
 from cyclopts import App
 from rich.console import Console
 
@@ -24,6 +25,22 @@ from dros.events import enqueue_event, process_event
 from dros.invocation_log import append_invocation_log
 from dros.ip_lists import load_ip_lists, summarize_ip_lists, update_ip_lists
 from dros.locks import APPLY_LOCK_PATH, LockBusyError, exclusive_lock
+from dros.ovpn import (
+    bootstrap_ca,
+    create_client_profile,
+    create_server_profile,
+    doctor as ovpn_doctor,
+    init_instance,
+    list_certs,
+    list_instances,
+    list_profiles_payload,
+    renew_client,
+    renew_crl,
+    renew_server,
+    revoke_cert,
+    update_client,
+    update_server,
+)
 from dros.settings import DEFAULT_SETTINGS_PATH, DrosSettings, load_settings
 from dros.update import UpdateValidationError, run_update
 from dros.web.auth import WebAuthStore, resolve_auth_db_path
@@ -49,6 +66,16 @@ dnsmasq_app = App(name="dnsmasq", help="dnsmasq utilities.")
 app.command(dnsmasq_app)
 dnsmasq_china_names_app = App(name="china-names", help="dnsmasq China names utilities.")
 dnsmasq_app.command(dnsmasq_china_names_app)
+ovpn_app = App(name="ovpn", help="OpenVPN PKI and profile utilities.")
+app.command(ovpn_app)
+ovpn_server_app = App(name="server", help="OpenVPN server profile operations.")
+ovpn_app.command(ovpn_server_app)
+ovpn_client_app = App(name="client", help="OpenVPN client profile operations.")
+ovpn_app.command(ovpn_client_app)
+ovpn_cert_app = App(name="cert", help="OpenVPN certificate operations.")
+ovpn_app.command(ovpn_cert_app)
+ovpn_crl_app = App(name="crl", help="OpenVPN CRL operations.")
+ovpn_app.command(ovpn_crl_app)
 
 
 def _not_ready(command: str) -> None:
@@ -209,6 +236,225 @@ def dnsmasq_china_names_update(verbose: int = 1, timeout: float = 30.0) -> None:
         console.print("[green]dnsmasq China names updated[/green]")
 
 
+@ovpn_app.command(name="init")
+def ovpn_init(name: str, ca_cn: str | None = None, force: bool = False, verbose: int = 1) -> None:
+    """Create an OpenVPN instance config and CA."""
+    try:
+        settings = _load_cli_settings()
+        _ensure_ovpn_privileges(settings)
+        with _manual_cli_lock(settings):
+            instance = init_instance(settings, name, ca_cn=ca_cn, force=force)
+    except (OSError, RuntimeError, ValueError, subprocess.CalledProcessError) as exc:
+        error_console.print(f"[red]ovpn init failed:[/red] {exc}")
+        raise SystemExit(1) from exc
+    if verbose > 0:
+        console.print(f"created ovpn instance {instance.name}: {instance.logical_root}", markup=False)
+
+
+@ovpn_app.command(name="bootstrap")
+def ovpn_bootstrap(instance: str | None = None, force: bool = False, verbose: int = 1) -> None:
+    """Create or refresh the CA for an existing OpenVPN instance."""
+    try:
+        settings = _load_cli_settings()
+        _ensure_ovpn_privileges(settings)
+        with _manual_cli_lock(settings):
+            selected = bootstrap_ca(settings, instance=instance, force=force)
+    except (OSError, RuntimeError, ValueError, subprocess.CalledProcessError) as exc:
+        error_console.print(f"[red]ovpn bootstrap failed:[/red] {exc}")
+        raise SystemExit(1) from exc
+    if verbose > 0:
+        console.print(f"bootstrapped ovpn CA: {selected.name}", markup=False)
+
+
+@ovpn_app.command(name="list")
+def ovpn_list(target: str = "instances", instance: str | None = None, verbose: int = 1) -> None:
+    """List OpenVPN instances, profiles, or certs."""
+    try:
+        settings = _load_cli_settings()
+        if target == "instances":
+            payload = [{"name": item.name, "root": str(item.logical_root)} for item in list_instances(settings)]
+        elif target == "profiles":
+            payload = list_profiles_payload(settings, instance=instance)
+        elif target == "certs":
+            payload = list_certs(settings, instance=instance)
+        else:
+            raise ValueError("ovpn list target must be one of: instances, profiles, certs")
+    except (OSError, RuntimeError, ValueError) as exc:
+        error_console.print(f"[red]ovpn list failed:[/red] {exc}")
+        raise SystemExit(1) from exc
+    if verbose > 0:
+        console.print(yaml.safe_dump(payload, sort_keys=False, allow_unicode=False), markup=False)
+
+
+@ovpn_app.command(name="doctor")
+def ovpn_doctor_command(instance: str | None = None, verbose: int = 1) -> None:
+    """Print a compact OpenVPN instance health summary."""
+    try:
+        settings = _load_cli_settings()
+        payload = ovpn_doctor(settings, instance=instance)
+    except (OSError, RuntimeError, ValueError) as exc:
+        error_console.print(f"[red]ovpn doctor failed:[/red] {exc}")
+        raise SystemExit(1) from exc
+    if verbose > 0:
+        console.print(yaml.safe_dump(payload, sort_keys=False, allow_unicode=False), markup=False)
+
+
+@ovpn_server_app.command(name="create")
+def ovpn_server_create(
+    name: str,
+    instance: str | None = None,
+    endpoint: str | None = None,
+    cn: str | None = None,
+    network: str | None = None,
+    netmask: str | None = None,
+    force: bool = False,
+    verbose: int = 1,
+) -> None:
+    """Create an OpenVPN server profile."""
+    try:
+        settings = _load_cli_settings()
+        _ensure_ovpn_privileges(settings)
+        with _manual_cli_lock(settings):
+            profile = create_server_profile(
+                settings,
+                name,
+                instance=instance,
+                endpoint=endpoint,
+                cn=cn,
+                network=network,
+                netmask=netmask,
+                force=force,
+            )
+    except (OSError, RuntimeError, ValueError, subprocess.CalledProcessError) as exc:
+        error_console.print(f"[red]ovpn server create failed:[/red] {exc}")
+        raise SystemExit(1) from exc
+    if verbose > 0:
+        console.print(
+            f"created ovpn server profile {profile.name}: {profile.logical_root / 'profile.yaml'}",
+            markup=False,
+        )
+
+
+@ovpn_server_app.command(name="update")
+def ovpn_server_update(name: str, instance: str | None = None, verbose: int = 1) -> None:
+    """Upsert the server certificate and server.conf for a profile."""
+    try:
+        settings = _load_cli_settings()
+        _ensure_ovpn_privileges(settings)
+        with _manual_cli_lock(settings):
+            paths = update_server(settings, name, instance=instance)
+    except (OSError, RuntimeError, ValueError, subprocess.CalledProcessError) as exc:
+        error_console.print(f"[red]ovpn server update failed:[/red] {exc}")
+        raise SystemExit(1) from exc
+    if verbose > 0:
+        _print_ovpn_paths(f"updated ovpn server {name}", paths)
+
+
+@ovpn_server_app.command(name="renew")
+def ovpn_server_renew(name: str, instance: str | None = None, verbose: int = 1) -> None:
+    """Issue a fresh server certificate and refresh server.conf."""
+    try:
+        settings = _load_cli_settings()
+        _ensure_ovpn_privileges(settings)
+        with _manual_cli_lock(settings):
+            paths = renew_server(settings, name, instance=instance)
+    except (OSError, RuntimeError, ValueError, subprocess.CalledProcessError) as exc:
+        error_console.print(f"[red]ovpn server renew failed:[/red] {exc}")
+        raise SystemExit(1) from exc
+    if verbose > 0:
+        _print_ovpn_paths(f"renewed ovpn server {name}", paths)
+
+
+@ovpn_client_app.command(name="create")
+def ovpn_client_create(
+    name: str,
+    instance: str | None = None,
+    cn: str | None = None,
+    force: bool = False,
+    verbose: int = 1,
+) -> None:
+    """Create an OpenVPN client profile."""
+    try:
+        settings = _load_cli_settings()
+        _ensure_ovpn_privileges(settings)
+        with _manual_cli_lock(settings):
+            profile = create_client_profile(settings, name, instance=instance, cn=cn, force=force)
+    except (OSError, RuntimeError, ValueError, subprocess.CalledProcessError) as exc:
+        error_console.print(f"[red]ovpn client create failed:[/red] {exc}")
+        raise SystemExit(1) from exc
+    if verbose > 0:
+        console.print(
+            f"created ovpn client profile {profile.name}: {profile.logical_root / 'profile.yaml'}",
+            markup=False,
+        )
+
+
+@ovpn_client_app.command(name="update")
+def ovpn_client_update(name: str, instance: str | None = None, verbose: int = 1) -> None:
+    """Upsert the client certificate and render ovpn files."""
+    try:
+        settings = _load_cli_settings()
+        _ensure_ovpn_privileges(settings)
+        with _manual_cli_lock(settings):
+            paths = update_client(settings, name, instance=instance)
+    except (OSError, RuntimeError, ValueError, subprocess.CalledProcessError) as exc:
+        error_console.print(f"[red]ovpn client update failed:[/red] {exc}")
+        raise SystemExit(1) from exc
+    if verbose > 0:
+        _print_ovpn_paths(f"updated ovpn client {name}", paths)
+
+
+@ovpn_client_app.command(name="renew")
+def ovpn_client_renew(name: str, instance: str | None = None, verbose: int = 1) -> None:
+    """Issue a fresh client certificate and refresh ovpn files."""
+    try:
+        settings = _load_cli_settings()
+        _ensure_ovpn_privileges(settings)
+        with _manual_cli_lock(settings):
+            paths = renew_client(settings, name, instance=instance)
+    except (OSError, RuntimeError, ValueError, subprocess.CalledProcessError) as exc:
+        error_console.print(f"[red]ovpn client renew failed:[/red] {exc}")
+        raise SystemExit(1) from exc
+    if verbose > 0:
+        _print_ovpn_paths(f"renewed ovpn client {name}", paths)
+
+
+@ovpn_cert_app.command(name="revoke")
+def ovpn_cert_revoke(
+    server: str | None = None,
+    client: str | None = None,
+    instance: str | None = None,
+    verbose: int = 1,
+) -> None:
+    """Revoke the latest server or client certificate and refresh CRL."""
+    try:
+        settings = _load_cli_settings()
+        _ensure_ovpn_privileges(settings)
+        with _manual_cli_lock(settings):
+            path = revoke_cert(settings, server=server, client=client, instance=instance)
+    except (OSError, RuntimeError, ValueError, subprocess.CalledProcessError) as exc:
+        error_console.print(f"[red]ovpn cert revoke failed:[/red] {exc}")
+        raise SystemExit(1) from exc
+    if verbose > 0:
+        role = "server" if server else "client"
+        console.print(f"revoked ovpn {role} {server or client}; crl: {path}", markup=False)
+
+
+@ovpn_crl_app.command(name="renew")
+def ovpn_crl_renew(instance: str | None = None, verbose: int = 1) -> None:
+    """Refresh the OpenVPN CRL file without revoking a certificate."""
+    try:
+        settings = _load_cli_settings()
+        _ensure_ovpn_privileges(settings)
+        with _manual_cli_lock(settings):
+            path = renew_crl(settings, instance=instance)
+    except (OSError, RuntimeError, ValueError, subprocess.CalledProcessError) as exc:
+        error_console.print(f"[red]ovpn crl renew failed:[/red] {exc}")
+        raise SystemExit(1) from exc
+    if verbose > 0:
+        console.print(f"renewed ovpn crl: {path}", markup=False)
+
+
 @web_app.command(name="create-user")
 def web_create_user(username: str, password: str | None = None) -> None:
     """Create a DROS Web login user."""
@@ -335,7 +581,7 @@ def _try_load_cli_settings_for_logging() -> DrosSettings | None:
 @contextmanager
 def _manual_cli_lock(settings: DrosSettings):
     try:
-        with exclusive_lock(settings.paths.run / APPLY_LOCK_PATH, blocking=False):
+        with exclusive_lock(_settings_target_path(settings, settings.paths.run / APPLY_LOCK_PATH), blocking=False):
             yield
     except LockBusyError as exc:
         raise RuntimeError("another manual gw command is already running") from exc
@@ -361,6 +607,24 @@ def _ensure_web_auth_privileges(settings: DrosSettings) -> None:
     auth_db = resolve_auth_db_path(settings)
     if not path_writable_for_current_user(auth_db.parent):
         reexec_with_sudo([sys.executable, "-m", "dros.cli.main", *_current_raw_args])
+
+
+def _ensure_ovpn_privileges(settings: DrosSettings) -> None:
+    if os.geteuid() == 0:
+        return
+    _ensure_path_privileges(_settings_target_path(settings, settings.paths.containers.parent / "ovpn"))
+
+
+def _print_ovpn_paths(message: str, paths: list[Path]) -> None:
+    console.print(f"{message}:", markup=False)
+    for path in paths:
+        console.print(f"  - {path}", markup=False)
+
+
+def _settings_target_path(settings: DrosSettings, path: Path) -> Path:
+    if not path.is_absolute() or settings.sys_root == Path("/"):
+        return path
+    return settings.sys_root / path.relative_to("/")
 
 
 def _read_password(password: str | None) -> str:

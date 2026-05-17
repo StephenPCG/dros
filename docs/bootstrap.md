@@ -44,6 +44,9 @@ any selected object is invalid.
 - `docker.resources` owns `DockerContainer`, `DockerApp`, and `DockerDNS`
   objects, compose project files under `/opt/gateway/containers`, and optional
   dnsmasq records for Docker containers.
+- `ovpn` is intentionally not a ConfigObject plugin. It owns OpenVPN instances,
+  profile files, CA material, CRLs, and generated `.ovpn` files under
+  `/opt/gateway/ovpn`; see `docs/openvpn.md`.
 
 Plugins declare their owned system packages and managed files. The registry
 rejects duplicate ownership so later work cannot accidentally make two plugins

@@ -23,6 +23,7 @@ previous rewrite.
 uv sync
 uv run gw help
 uv run gw update iface/br0
+uv run gw ovpn list instances
 uv run gw restart daemon
 uv run gw restart web
 uv run gw web create-user admin
@@ -48,6 +49,9 @@ for the password interactively.
 The Debian test host is documented in `docs/lab/test-gw.md`.
 
 Bootstrap and plugin design notes live in `docs/bootstrap.md`.
+
+OpenVPN instance, profile, certificate, and Web management notes live in
+`docs/openvpn.md`.
 
 ## Install
 
