@@ -10,7 +10,7 @@ from dros.config_objects import InterfaceConfig
 from dros.events import process_event
 from dros.plugins.network_interfaces import _reload_ifupdown_interface
 from dros.settings import DrosPaths, DrosSettings
-from dros.update import UpdateValidationError, run_update
+from dros.update import UpdateValidationError, run_config_check, run_update
 
 
 def _console(output: StringIO) -> Console:
@@ -22,6 +22,56 @@ def _settings(tmp_path: Path) -> DrosSettings:
         sysRoot=tmp_path / "sysroot",
         paths=DrosPaths(configs=tmp_path / "configs", run=tmp_path / "run"),
     )
+
+
+def test_config_check_validates_all_objects_without_applying(tmp_path: Path) -> None:
+    settings = _settings(tmp_path)
+    settings.paths.configs.mkdir(parents=True)
+    (settings.paths.configs / "network.yaml").write_text(
+        """
+kind: Interface
+metadata:
+  name: eth0
+spec:
+  type: eth
+---
+kind: Interface
+metadata:
+  name: br0.10
+spec:
+  type: vlan
+  parent: br0
+  id: 5000
+""".lstrip(),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(UpdateValidationError) as exc_info:
+        run_config_check(settings, console=_console(StringIO()))
+
+    assert "vlan id must be between 1 and 4094" in "\n".join(exc_info.value.errors)
+    assert "parent Interface/br0 is not defined" in "\n".join(exc_info.value.errors)
+    assert not (settings.sys_root / "etc/network/interfaces.d").exists()
+
+
+def test_config_check_reports_object_count_for_valid_configs(tmp_path: Path) -> None:
+    settings = _settings(tmp_path)
+    settings.paths.configs.mkdir(parents=True)
+    (settings.paths.configs / "network.yaml").write_text(
+        """
+kind: Interface
+metadata:
+  name: eth0
+spec:
+  type: eth
+""".lstrip(),
+        encoding="utf-8",
+    )
+
+    result = run_config_check(settings, console=_console(StringIO()))
+
+    assert result.object_count == 1
+    assert not result.actions
 
 
 def _interface_file(settings: DrosSettings, name: str) -> Path:

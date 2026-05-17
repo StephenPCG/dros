@@ -42,7 +42,7 @@ from dros.ovpn import (
     update_server,
 )
 from dros.settings import DEFAULT_SETTINGS_PATH, DrosSettings, load_settings
-from dros.update import UpdateValidationError, run_update
+from dros.update import UpdateValidationError, run_config_check, run_update
 from dros.kind_aliases import resolve_kind_alias
 from dros.executor import SystemExecutor
 from dros.plugins import create_default_registry
@@ -198,6 +198,27 @@ def config_create(kind: str) -> None:
     except ValueError as exc:
         error_console.print(f"[red]config create failed:[/red] {exc}")
         raise SystemExit(1) from exc
+
+
+@config_app.command(name="check")
+def config_check(verbose: int = 1) -> None:
+    """Validate all ConfigObjects without applying them."""
+    if verbose not in {0, 1, 2}:
+        error_console.print("[red]config check failed:[/red] --verbose must be 0, 1, or 2")
+        raise SystemExit(2)
+    try:
+        settings = _load_cli_settings()
+        result = run_config_check(settings, verbose=verbose, console=console)
+    except UpdateValidationError as exc:
+        error_console.print("[red]config check failed:[/red]")
+        for error in exc.errors:
+            error_console.print(f"- {error}", markup=False)
+        raise SystemExit(1) from exc
+    except (OSError, RuntimeError, ValueError) as exc:
+        error_console.print(f"[red]config check failed:[/red] {exc}")
+        raise SystemExit(1) from exc
+    if verbose > 0:
+        console.print(f"[green]ok:[/green] {result.object_count} ConfigObjects")
 
 
 @ip_list_app.command(name="list")

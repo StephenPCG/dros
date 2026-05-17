@@ -141,6 +141,81 @@ def test_config_create_accepts_ipv6pd_and_resolvconf_aliases(capsys) -> None:
     assert "nameservers:" in output
 
 
+def test_config_check_command_loads_settings_and_checks_all_configs(
+    monkeypatch,
+    tmp_path: Path,
+    capsys,
+) -> None:
+    settings_file = tmp_path / "settings.yaml"
+    settings_file.write_text(
+        f"""
+sysRoot: {tmp_path / "sysroot"}
+paths:
+  configs: {tmp_path / "configs"}
+  logs: {tmp_path / "logs"}
+  run: {tmp_path / "run"}
+""".lstrip(),
+        encoding="utf-8",
+    )
+    calls: list[tuple[DrosSettings, int]] = []
+
+    class FakeCheckResult:
+        object_count = 3
+        actions: list[object] = []
+
+    def fake_run_config_check(
+        settings: DrosSettings,
+        *,
+        verbose: int,
+        console: object,
+    ) -> FakeCheckResult:
+        calls.append((settings, verbose))
+        return FakeCheckResult()
+
+    monkeypatch.setattr(cli_main, "run_config_check", fake_run_config_check)
+
+    assert cli_main.main(["--settings", str(settings_file), "config", "check"]) == 0
+
+    assert [(call[0].sys_root, call[1]) for call in calls] == [(tmp_path / "sysroot", 1)]
+    output = capsys.readouterr().out
+    assert "ok: 3 ConfigObjects" in output
+
+
+def test_config_check_command_prints_all_validation_errors(
+    monkeypatch,
+    tmp_path: Path,
+    capsys,
+) -> None:
+    settings_file = tmp_path / "settings.yaml"
+    settings_file.write_text(
+        f"""
+sysRoot: {tmp_path / "sysroot"}
+paths:
+  configs: {tmp_path / "configs"}
+  logs: {tmp_path / "logs"}
+  run: {tmp_path / "run"}
+""".lstrip(),
+        encoding="utf-8",
+    )
+
+    def fake_run_config_check(
+        settings: DrosSettings,
+        *,
+        verbose: int,
+        console: object,
+    ) -> None:
+        raise UpdateValidationError(["Interface/a: bad a", "RouteTable/b: bad b"])
+
+    monkeypatch.setattr(cli_main, "run_config_check", fake_run_config_check)
+
+    assert cli_main.main(["--settings", str(settings_file), "config", "check"]) == 1
+
+    output = capsys.readouterr().err
+    assert "config check failed:" in output
+    assert "Interface/a: bad a" in output
+    assert "RouteTable/b: bad b" in output
+
+
 def test_update_command_loads_settings_and_runs_update(monkeypatch, tmp_path: Path) -> None:
     settings_file = tmp_path / "settings.yaml"
     settings_file.write_text(

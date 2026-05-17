@@ -25,6 +25,12 @@ class UpdateResult:
 
 
 @dataclass(frozen=True)
+class ConfigCheckResult:
+    object_count: int
+    actions: list[SystemAction]
+
+
+@dataclass(frozen=True)
 class UpdateTarget:
     kind: str | None = None
     name: str | None = None
@@ -50,23 +56,7 @@ def run_update(
         registry=active_registry,
     )
 
-    objects_by_plugin: dict[str, list[ConfigObject]] = {}
-    validation_errors: list[str] = []
-    for obj in selected:
-        try:
-            plugin = active_registry.plugin_for_kind(obj.kind)
-        except KeyError:
-            validation_errors.append(f"{obj.kind}/{obj.name}: no plugin registered for kind")
-            continue
-        objects_by_plugin.setdefault(plugin.name, []).append(obj)
-
-    for plugin in active_registry.bootstrap_order():
-        objects = objects_by_plugin.get(plugin.name)
-        if objects:
-            validation_errors.extend(plugin.validate(context, objects))
-
-    if validation_errors:
-        raise UpdateValidationError(validation_errors)
+    objects_by_plugin = _validate_objects(active_registry, context, selected)
 
     for plugin in active_registry.bootstrap_order():
         objects = objects_by_plugin.get(plugin.name)
@@ -77,6 +67,52 @@ def run_update(
         plugin.update(context, objects)
 
     return UpdateResult(actions=executor.actions)
+
+
+def run_config_check(
+    settings: DrosSettings,
+    *,
+    verbose: int = 1,
+    console: Console | None = None,
+    runner: CommandRunner = subprocess.run,
+    registry: PluginRegistry | None = None,
+) -> ConfigCheckResult:
+    active_registry = registry or create_default_registry()
+    configs = load_config_objects(settings)
+    executor = SystemExecutor(settings, verbose=verbose, console=console, runner=runner)
+    context = UpdateContext(
+        settings=settings,
+        configs=configs,
+        executor=executor,
+        registry=active_registry,
+    )
+    _validate_objects(active_registry, context, configs.objects())
+    return ConfigCheckResult(object_count=len(configs.objects()), actions=executor.actions)
+
+
+def _validate_objects(
+    registry: PluginRegistry,
+    context: UpdateContext,
+    selected: list[ConfigObject],
+) -> dict[str, list[ConfigObject]]:
+    objects_by_plugin: dict[str, list[ConfigObject]] = {}
+    validation_errors: list[str] = []
+    for obj in selected:
+        try:
+            plugin = registry.plugin_for_kind(obj.kind)
+        except KeyError:
+            validation_errors.append(f"{obj.kind}/{obj.name}: no plugin registered for kind")
+            continue
+        objects_by_plugin.setdefault(plugin.name, []).append(obj)
+
+    for plugin in registry.bootstrap_order():
+        objects = objects_by_plugin.get(plugin.name)
+        if objects:
+            validation_errors.extend(plugin.validate(context, objects))
+
+    if validation_errors:
+        raise UpdateValidationError(validation_errors)
+    return objects_by_plugin
 
 
 def _parse_target(target: str | None) -> UpdateTarget:
