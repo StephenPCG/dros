@@ -22,11 +22,14 @@ any selected object is invalid.
   directory, dnsmasq, avahi, and core network packages.
 - `network.interfaces` owns `DevGroup` and `Interface` objects, ifupdown
   fragments, PPP hook dispatch, and runtime interface properties.
+- `network.ipv6pd` owns `IPv6PD` objects, wide-dhcpv6 configuration, radvd
+  configuration, IPv6 refresh hooks, and the IPv6PD nftables snippet.
 - `network.routing` owns `FwMark`, `Gateway`, `RouteTable`, and
   `RouteRuleSet` objects, route table names, policy route rules, and route
   refresh hooks.
 - `network.firewall` owns `Firewall` objects, `/etc/nftables.conf`, and the
   generated base nftables ruleset under `/etc/dros/nftables.d`.
+- `network.resolvconf` owns `ResolvConf` objects and `/etc/resolv.conf`.
 - `network.dnsmasq` owns `DnsmasqDNS`, `DnsmasqDHCP`, and
   `DnsmasqChinaNames` objects, dnsmasq include fragments, and the China Names
   refresh cron job.
@@ -98,6 +101,8 @@ Detailed ConfigObject references:
 - `docs/config-objects/Gateway.md`
 - `docs/config-objects/Interface.md`
 - `docs/config-objects/IpListUpdater.md`
+- `docs/config-objects/IPv6PD.md`
+- `docs/config-objects/ResolvConf.md`
 - `docs/config-objects/RouteRuleSet.md`
 - `docs/config-objects/RouteTable.md`
 - `docs/config-objects/SystemNetworkConfig.md`

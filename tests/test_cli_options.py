@@ -129,6 +129,18 @@ def test_config_create_accepts_collectd_alias(capsys) -> None:
     assert "ping:" in output
 
 
+def test_config_create_accepts_ipv6pd_and_resolvconf_aliases(capsys) -> None:
+    assert cli_main.main(["config", "create", "ipv6"]) == 0
+    output = capsys.readouterr().out
+    assert "kind: IPv6PD" in output
+    assert "uplink: pppoe-wan" in output
+
+    assert cli_main.main(["config", "create", "resolvconf"]) == 0
+    output = capsys.readouterr().out
+    assert "kind: ResolvConf" in output
+    assert "nameservers:" in output
+
+
 def test_update_command_loads_settings_and_runs_update(monkeypatch, tmp_path: Path) -> None:
     settings_file = tmp_path / "settings.yaml"
     settings_file.write_text(

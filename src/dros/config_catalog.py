@@ -230,6 +230,44 @@ spec:
         - 8.8.8.8
 """,
     ),
+    "IPv6PD": ConfigObjectCatalogEntry(
+        kind="IPv6PD",
+        example="""apiVersion: dros/v1alpha1
+kind: IPv6PD
+metadata:
+  name: system
+spec:
+  uplink: pppoe-wan
+  prefixLengthHint: 60
+  delegatedPrefixLength: 60
+  acceptRA: 2
+  dnsServers:
+    - fd02::1
+  searchDomains:
+    - lan
+  downstream:
+    - iface: br-lan
+      subnetId: 2
+      ulaPrefix: fd02::/64
+""",
+    ),
+    "ResolvConf": ConfigObjectCatalogEntry(
+        kind="ResolvConf",
+        example="""apiVersion: dros/v1alpha1
+kind: ResolvConf
+metadata:
+  name: system
+spec:
+  nameservers:
+    - 10.0.0.1
+    - 223.5.5.5
+  search:
+    - lan
+  options:
+    - timeout:2
+    - attempts:2
+""",
+    ),
     "DockerContainer": ConfigObjectCatalogEntry(
         kind="DockerContainer",
         example="""apiVersion: dros/v1alpha1

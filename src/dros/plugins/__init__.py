@@ -12,7 +12,9 @@ from . import (
     network_core,
     network_firewall,
     network_interfaces,
+    network_ipv6pd,
     network_routing,
+    resolvconf,
     system_mirror,
     system_utilities,
 )
@@ -23,8 +25,10 @@ def create_default_registry() -> PluginRegistry:
     registry.register(system_mirror.create_plugin())
     registry.register(network_core.create_plugin())
     registry.register(network_interfaces.create_plugin())
+    registry.register(network_ipv6pd.create_plugin())
     registry.register(network_routing.create_plugin())
     registry.register(network_firewall.create_plugin())
+    registry.register(resolvconf.create_plugin())
     registry.register(dnsmasq.create_plugin())
     registry.register(ip_lists.create_plugin())
     registry.register(system_utilities.create_plugin())

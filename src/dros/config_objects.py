@@ -328,6 +328,69 @@ class CollectdConfig(BaseModel):
     raw: list[str] = Field(default_factory=list)
 
 
+class ResolvConfConfig(BaseModel):
+    model_config = ConfigDict(extra="ignore", populate_by_name=True)
+
+    nameservers: list[str] = Field(default_factory=list)
+    search: list[str] = Field(default_factory=list)
+    options: list[str] = Field(default_factory=list)
+
+
+class IPv6PDDownstreamConfig(BaseModel):
+    model_config = ConfigDict(extra="ignore", populate_by_name=True)
+
+    iface: str
+    subnet_id: int = Field(validation_alias=AliasChoices("subnet_id", "subnetId"))
+    prefix_length: int = Field(
+        64,
+        validation_alias=AliasChoices("prefix_length", "prefixLength"),
+    )
+    address: str = "::1"
+    delegated: bool = True
+    ula_prefix: str | None = Field(
+        None,
+        validation_alias=AliasChoices("ula_prefix", "ulaPrefix"),
+    )
+    advertise: bool = True
+    rdnss: list[str] = Field(default_factory=list)
+    dnssl: list[str] = Field(default_factory=list)
+
+
+class IPv6PDConfig(BaseModel):
+    model_config = ConfigDict(extra="ignore", populate_by_name=True)
+
+    enabled: bool = True
+    client: Literal["wide-dhcpv6"] = "wide-dhcpv6"
+    duid: str | None = None
+    uplink: str | None = None
+    iaid: int = 1
+    prefix_length_hint: int | None = Field(
+        60,
+        validation_alias=AliasChoices("prefix_length_hint", "prefixLengthHint"),
+    )
+    delegated_prefix_length: int | None = Field(
+        None,
+        validation_alias=AliasChoices("delegated_prefix_length", "delegatedPrefixLength"),
+    )
+    request_address: bool = Field(
+        False,
+        validation_alias=AliasChoices("request_address", "requestAddress"),
+    )
+    accept_ra: int | None = Field(
+        2,
+        validation_alias=AliasChoices("accept_ra", "acceptRA"),
+    )
+    dns_servers: list[str] = Field(
+        default_factory=list,
+        validation_alias=AliasChoices("dns_servers", "dnsServers"),
+    )
+    search_domains: list[str] = Field(
+        default_factory=list,
+        validation_alias=AliasChoices("search_domains", "searchDomains"),
+    )
+    downstream: list[IPv6PDDownstreamConfig] = Field(default_factory=list)
+
+
 class DockerMountConfig(BaseModel):
     model_config = ConfigDict(extra="ignore", populate_by_name=True)
 

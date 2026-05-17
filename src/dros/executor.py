@@ -100,6 +100,22 @@ class SystemExecutor:
                 self._print_diff(logical, old_content, content)
         return True
 
+    def write_binary_file(self, path: str | Path, content: bytes, *, mode: int = 0o644) -> bool:
+        target = self.target_path(path)
+        logical = _logical_path(path)
+        old_content = target.read_bytes() if target.exists() else None
+        if old_content == content:
+            return False
+
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(content)
+        os.chmod(target, mode)
+
+        self.actions.append(SystemAction(kind="write_file", path=logical, message=f"updated {logical}"))
+        if self.verbose >= 1:
+            self._print(f"updated {logical}")
+        return True
+
     def delete_file(self, path: str | Path) -> bool:
         target = self.target_path(path)
         if not target.exists():
