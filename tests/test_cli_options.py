@@ -105,6 +105,16 @@ def test_config_create_accepts_dnsmasq_aliases(capsys) -> None:
     assert "kind: DnsmasqChinaNames" in capsys.readouterr().out
 
 
+def test_config_create_accepts_docker_aliases(capsys) -> None:
+    assert cli_main.main(["config", "create", "docker-container"]) == 0
+    assert "kind: DockerContainer" in capsys.readouterr().out
+
+    assert cli_main.main(["config", "create", "docker-app"]) == 0
+    output = capsys.readouterr().out
+    assert "kind: DockerApp" in output
+    assert "app: nginx" in output
+
+
 def test_update_command_loads_settings_and_runs_update(monkeypatch, tmp_path: Path) -> None:
     settings_file = tmp_path / "settings.yaml"
     settings_file.write_text(

@@ -275,6 +275,107 @@ class DnsmasqChinaNamesConfig(BaseModel):
     command: str | None = None
 
 
+class DockerMountConfig(BaseModel):
+    model_config = ConfigDict(extra="ignore", populate_by_name=True)
+
+    source_type: Literal["inline", "file", "dir", "data-dir"] = Field(
+        validation_alias=AliasChoices("source_type", "sourceType"),
+    )
+    source: str | None = None
+    target: str
+    mode: Literal["ro", "rw"] = "rw"
+    name: str | None = None
+
+
+class DockerAppFileConfig(BaseModel):
+    model_config = ConfigDict(extra="ignore", populate_by_name=True)
+
+    source_type: Literal["inline", "file", "dir"] = Field(
+        validation_alias=AliasChoices("source_type", "sourceType"),
+    )
+    source: str
+    target: str | None = None
+    mode: Literal["ro", "rw"] = "ro"
+    name: str | None = None
+
+
+class DockerAppNginxConfFileConfig(BaseModel):
+    model_config = ConfigDict(extra="ignore", populate_by_name=True)
+
+    source_type: Literal["inline", "file"] = Field(
+        validation_alias=AliasChoices("source_type", "sourceType"),
+    )
+    source: str
+    mode: Literal["ro", "rw"] = "ro"
+    name: str | None = None
+
+
+class DockerContainerConfig(BaseModel):
+    model_config = ConfigDict(extra="ignore", populate_by_name=True)
+
+    enabled: bool = True
+    image: str
+    network: str = "default"
+    restart: Literal["no", "always", "on-failure", "unless-stopped"] = "unless-stopped"
+    environment: dict[str, str] = Field(default_factory=dict)
+    mounts: list[DockerMountConfig] = Field(default_factory=list)
+    cap_add: list[str] = Field(
+        default_factory=list,
+        validation_alias=AliasChoices("cap_add", "capAdd"),
+    )
+    cap_drop: list[str] = Field(
+        default_factory=list,
+        validation_alias=AliasChoices("cap_drop", "capDrop"),
+    )
+    devices: list[str] = Field(default_factory=list)
+    privileged: bool = False
+    command: str | list[str] | None = None
+    dns_names: list[str] = Field(
+        default_factory=list,
+        validation_alias=AliasChoices("dns_names", "dnsNames"),
+    )
+    additional_domains: list[str] = Field(
+        default_factory=list,
+        validation_alias=AliasChoices("additional_domains", "additionalDomains"),
+    )
+
+
+class DockerAppConfig(BaseModel):
+    model_config = ConfigDict(extra="ignore", populate_by_name=True)
+
+    enabled: bool = True
+    app: Literal["vlmcsd", "nginx", "ddns-go", "unifi", "certimate"]
+    variant: Literal["openresty", "nginx"] | None = None
+    image: str | None = None
+    image_name: str | None = Field(
+        None,
+        validation_alias=AliasChoices("image_name", "imageName"),
+    )
+    image_tag: str | None = Field(
+        None,
+        validation_alias=AliasChoices("image_tag", "imageTag"),
+    )
+    network: str = "default"
+    nginx_conf_file: DockerAppNginxConfFileConfig | None = Field(
+        None,
+        validation_alias=AliasChoices("nginx_conf_file", "nginxConfFile"),
+    )
+    conf_files: list[DockerAppFileConfig] = Field(
+        default_factory=list,
+        validation_alias=AliasChoices("conf_files", "confFiles", "files"),
+    )
+    mounts: list[DockerMountConfig] = Field(default_factory=list)
+    environment: dict[str, str] = Field(default_factory=dict)
+    dns_names: list[str] = Field(
+        default_factory=list,
+        validation_alias=AliasChoices("dns_names", "dnsNames"),
+    )
+    additional_domains: list[str] = Field(
+        default_factory=list,
+        validation_alias=AliasChoices("additional_domains", "additionalDomains"),
+    )
+
+
 class InterfaceConfig(BaseModel):
     model_config = ConfigDict(extra="ignore", populate_by_name=True)
 

@@ -76,6 +76,8 @@ The bootstrap singleton objects currently used are:
 Detailed ConfigObject references:
 
 - `docs/config-objects/DevGroup.md`
+- `docs/config-objects/DockerApp.md`
+- `docs/config-objects/DockerContainer.md`
 - `docs/config-objects/DnsmasqChinaNames.md`
 - `docs/config-objects/DnsmasqDHCP.md`
 - `docs/config-objects/DnsmasqDNS.md`

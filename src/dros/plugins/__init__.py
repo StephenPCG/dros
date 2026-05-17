@@ -6,6 +6,7 @@ from dros.plugins.base import PluginRegistry
 from . import (
     dnsmasq,
     docker_core,
+    docker_resources,
     ip_lists,
     network_core,
     network_firewall,
@@ -27,6 +28,7 @@ def create_default_registry() -> PluginRegistry:
     registry.register(ip_lists.create_plugin())
     registry.register(system_utilities.create_plugin())
     registry.register(docker_core.create_plugin())
+    registry.register(docker_resources.create_plugin())
     return registry
 
 

@@ -214,6 +214,49 @@ spec:
   schedule: "27 4 * * *"
 """,
     ),
+    "DockerContainer": ConfigObjectCatalogEntry(
+        kind="DockerContainer",
+        example="""apiVersion: dros/v1alpha1
+kind: DockerContainer
+metadata:
+  name: web-demo
+spec:
+  image: nginx:stable-alpine
+  network: default
+  restart: unless-stopped
+  environment:
+    TZ: Asia/Shanghai
+  mounts:
+    - sourceType: inline
+      name: default.conf
+      target: /etc/nginx/conf.d/default.conf
+      mode: ro
+      source: |
+        server {
+          listen 80;
+        }
+""",
+    ),
+    "DockerApp": ConfigObjectCatalogEntry(
+        kind="DockerApp",
+        example="""apiVersion: dros/v1alpha1
+kind: DockerApp
+metadata:
+  name: nginx
+spec:
+  app: nginx
+  variant: openresty
+  network: default
+  nginxConfFile:
+    sourceType: inline
+    name: nginx.conf
+    source: |
+      events {}
+      http {
+        include /etc/nginx/conf.d/*.conf;
+      }
+""",
+    ),
 }
 
 
