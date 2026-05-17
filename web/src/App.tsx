@@ -67,6 +67,30 @@ type OpenVPNCreateForm = {
   netmask: string
 }
 
+type MonitorSummary = {
+  system: {
+    hostname: string
+    kernel: string
+    cpuPercent: number | null
+    loadavg: number[] | null
+    uptimeSeconds: number | null
+  }
+  memory: {
+    totalBytes: number | null
+    availableBytes: number | null
+    usedBytes: number | null
+    usedPercent: number | null
+  }
+  interfaces: Array<{
+    name: string
+    operstate: string
+    rxBytes: number
+    txBytes: number
+    rxBytesPerSecond: number
+    txBytesPerSecond: number
+  }>
+}
+
 const pages: Array<{
   id: PageId
   label: string
@@ -240,7 +264,9 @@ function App() {
           <ActiveIcon className="size-5 text-muted-foreground" />
           <h1 className="text-xl font-semibold tracking-normal md:text-2xl">{active.label}</h1>
         </div>
-        {activePage === "openvpn" ? (
+        {activePage === "monitor" ? (
+          <MonitorPage />
+        ) : activePage === "openvpn" ? (
           <OpenVPNPage />
         ) : (
           <div className="min-h-[calc(100svh-11rem)] rounded-md border border-dashed border-border bg-muted/25" />
@@ -426,6 +452,110 @@ function MobileNavigationDrawer({
           })}
         </nav>
       </aside>
+    </div>
+  )
+}
+
+function MonitorPage() {
+  const [summary, setSummary] = useState<MonitorSummary | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState("")
+
+  useEffect(() => {
+    loadSummary()
+    const timer = window.setInterval(loadSummary, 5000)
+    return () => window.clearInterval(timer)
+  }, [])
+
+  async function loadSummary() {
+    setError("")
+    try {
+      const data = await apiJson<MonitorSummary>("/api/monitor/summary")
+      setSummary(data)
+    } catch (err) {
+      setError(errorMessage(err, "加载监控数据失败"))
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  return (
+    <div className="min-h-[calc(100svh-11rem)] space-y-5">
+      <div className="flex items-center justify-between gap-3">
+        <div className="text-sm text-muted-foreground">
+          {summary ? `${summary.system.hostname} · ${summary.system.kernel}` : "monitor"}
+        </div>
+        <Button variant="outline" onClick={loadSummary} disabled={loading}>
+          {loading ? <Loader2 className="size-4 animate-spin" /> : <RefreshCw className="size-4" />}
+          刷新
+        </Button>
+      </div>
+
+      {error ? <div className="rounded-md border border-destructive/35 bg-destructive/10 px-3 py-2 text-sm text-destructive">{error}</div> : null}
+
+      <div className="grid gap-3 md:grid-cols-3">
+        <MetricPanel
+          label="CPU"
+          value={summary?.system.cpuPercent == null ? "-" : `${summary.system.cpuPercent}%`}
+          detail={summary?.system.loadavg ? `load ${summary.system.loadavg.join(" / ")}` : "load -"}
+        />
+        <MetricPanel
+          label="内存"
+          value={summary?.memory.usedPercent == null ? "-" : `${summary.memory.usedPercent}%`}
+          detail={`${formatBytes(summary?.memory.usedBytes)} / ${formatBytes(summary?.memory.totalBytes)}`}
+        />
+        <MetricPanel
+          label="运行时间"
+          value={formatDuration(summary?.system.uptimeSeconds)}
+          detail="system uptime"
+        />
+      </div>
+
+      <div className="overflow-hidden rounded-md border bg-background">
+        <div className="border-b px-3 py-2 text-sm font-medium">接口速度</div>
+        {summary && summary.interfaces.length > 0 ? (
+          <div className="max-w-full overflow-x-auto">
+            <table className="w-full min-w-[42rem] text-left text-sm">
+              <thead className="border-b bg-muted/50 text-xs uppercase text-muted-foreground">
+                <tr>
+                  <th className="px-3 py-2 font-medium">接口</th>
+                  <th className="px-3 py-2 font-medium">状态</th>
+                  <th className="px-3 py-2 text-right font-medium">RX</th>
+                  <th className="px-3 py-2 text-right font-medium">TX</th>
+                  <th className="px-3 py-2 text-right font-medium">RX/s</th>
+                  <th className="px-3 py-2 text-right font-medium">TX/s</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y">
+                {summary.interfaces.map((iface) => (
+                  <tr key={iface.name}>
+                    <td className="px-3 py-3 font-mono text-xs">{iface.name}</td>
+                    <td className="px-3 py-3">{iface.operstate}</td>
+                    <td className="px-3 py-3 text-right font-mono text-xs">{formatBytes(iface.rxBytes)}</td>
+                    <td className="px-3 py-3 text-right font-mono text-xs">{formatBytes(iface.txBytes)}</td>
+                    <td className="px-3 py-3 text-right font-mono text-xs">{formatBytes(iface.rxBytesPerSecond)}</td>
+                    <td className="px-3 py-3 text-right font-mono text-xs">{formatBytes(iface.txBytesPerSecond)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        ) : (
+          <div className="px-3 py-10 text-sm text-muted-foreground">
+            {loading ? "正在加载" : "暂无接口数据"}
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
+function MetricPanel({ label, value, detail }: { label: string; value: ReactNode; detail: ReactNode }) {
+  return (
+    <div className="rounded-md border bg-background px-3 py-3">
+      <div className="text-xs font-medium uppercase text-muted-foreground">{label}</div>
+      <div className="mt-2 text-2xl font-semibold tracking-normal">{value}</div>
+      <div className="mt-1 text-xs text-muted-foreground">{detail}</div>
     </div>
   )
 }
@@ -964,6 +1094,38 @@ function emptyOpenVPNCreateForm(): OpenVPNCreateForm {
 
 function fileName(path: string): string {
   return path.split("/").pop() || path
+}
+
+function formatBytes(value: number | null | undefined): string {
+  if (value == null) {
+    return "-"
+  }
+  const units = ["B", "KiB", "MiB", "GiB", "TiB"]
+  let amount = value
+  for (const unit of units) {
+    if (amount < 1024 || unit === units[units.length - 1]) {
+      return unit === "B" ? `${Math.round(amount)} B` : `${amount.toFixed(1)} ${unit}`
+    }
+    amount /= 1024
+  }
+  return `${value} B`
+}
+
+function formatDuration(seconds: number | null | undefined): string {
+  if (seconds == null) {
+    return "-"
+  }
+  const total = Math.max(0, Math.floor(seconds))
+  const days = Math.floor(total / 86400)
+  const hours = Math.floor((total % 86400) / 3600)
+  const minutes = Math.floor((total % 3600) / 60)
+  if (days > 0) {
+    return `${days}d ${hours}h`
+  }
+  if (hours > 0) {
+    return `${hours}h ${minutes}m`
+  }
+  return `${minutes}m`
 }
 
 async function apiJson<T = unknown>(input: RequestInfo | URL, init?: RequestInit): Promise<T> {

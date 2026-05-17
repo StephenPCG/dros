@@ -23,7 +23,7 @@ from dros.config_catalog import render_config_object_example
 from dros.dnsmasq_china_names import DnsmasqChinaNamesUpdater
 from dros.events import enqueue_event, process_event
 from dros.invocation_log import append_invocation_log
-from dros.ip_lists import load_ip_lists, summarize_ip_lists, update_ip_lists
+from dros.ip_lists import AVAILABLE_IP_LIST_SOURCES, load_ip_lists, summarize_ip_lists, update_ip_lists
 from dros.locks import APPLY_LOCK_PATH, LockBusyError, exclusive_lock
 from dros.ovpn import (
     bootstrap_ca,
@@ -43,6 +43,12 @@ from dros.ovpn import (
 )
 from dros.settings import DEFAULT_SETTINGS_PATH, DrosSettings, load_settings
 from dros.update import UpdateValidationError, run_update
+from dros.kind_aliases import resolve_kind_alias
+from dros.executor import SystemExecutor
+from dros.plugins import create_default_registry
+from dros.plugins.base import UpdateContext
+from dros.plugins.network_xfrm import start_xfrm, stop_xfrm
+from dros.config_objects import XfrmTransportConfig
 from dros.web.auth import WebAuthStore, resolve_auth_db_path
 
 console = Console()
@@ -82,6 +88,40 @@ def _not_ready(command: str) -> None:
     console.print(f"[yellow]{command}[/yellow] is reserved for the next implementation phase.")
 
 
+def _xfrm_lifecycle(action: str, target: str, verbose: int) -> None:
+    if verbose not in {0, 1, 2}:
+        error_console.print(f"[red]{action} failed:[/red] --verbose must be 0, 1, or 2")
+        raise SystemExit(2)
+    try:
+        kind, sep, name = target.partition("/")
+        if not sep or not name:
+            raise ValueError(f"{action} expects kind/name target")
+        resolved = resolve_kind_alias(kind)
+        if resolved != "XfrmTransport":
+            raise ValueError(f"{action} currently supports XfrmTransport only, got {resolved}/{name}")
+        settings = _load_cli_settings()
+        _ensure_bootstrap_privileges(settings)
+        with _manual_cli_lock(settings):
+            configs = load_config_objects(settings)
+            obj = configs.require("XfrmTransport", name)
+            config = configs.resolve_object(obj, XfrmTransportConfig)
+            registry = create_default_registry()
+            executor = SystemExecutor(settings, verbose=verbose, console=console)
+            context = UpdateContext(
+                settings=settings,
+                configs=configs,
+                executor=executor,
+                registry=registry,
+            )
+            if action == "start":
+                start_xfrm(context, name, config)
+            else:
+                stop_xfrm(context, name, config)
+    except (KeyError, OSError, RuntimeError, ValueError, subprocess.CalledProcessError) as exc:
+        error_console.print(f"[red]{action} failed:[/red] {exc}")
+        raise SystemExit(1) from exc
+
+
 @app.command
 def bootstrap(verbose: int = 1) -> None:
     """Apply bootstrap hooks to the system."""
@@ -119,6 +159,18 @@ def update(target: str | None = None, verbose: int = 1) -> None:
     except (KeyError, OSError, RuntimeError, ValueError, subprocess.CalledProcessError) as exc:
         error_console.print(f"[red]update failed:[/red] {exc}")
         raise SystemExit(1) from exc
+
+
+@app.command
+def start(target: str, verbose: int = 1) -> None:
+    """Start a runtime object that supports start semantics."""
+    _xfrm_lifecycle("start", target, verbose)
+
+
+@app.command
+def stop(target: str, verbose: int = 1) -> None:
+    """Stop a runtime object that supports stop semantics."""
+    _xfrm_lifecycle("stop", target, verbose)
 
 
 @app.command
@@ -168,8 +220,15 @@ def ip_list_list() -> None:
         )
 
 
+@ip_list_app.command(name="sources")
+def ip_list_sources() -> None:
+    """List built-in downloadable IP list sources."""
+    for source in AVAILABLE_IP_LIST_SOURCES:
+        console.print(source)
+
+
 @ip_list_app.command(name="update")
-def ip_list_update(verbose: int = 1, timeout: float = 30.0) -> None:
+def ip_list_update(sources: list[str] | None = None, verbose: int = 1, timeout: float = 30.0) -> None:
     """Download runtime IP lists."""
     if verbose not in {0, 1, 2}:
         error_console.print("[red]ip-list update failed:[/red] --verbose must be 0, 1, or 2")
@@ -177,7 +236,15 @@ def ip_list_update(verbose: int = 1, timeout: float = 30.0) -> None:
     try:
         settings = _load_cli_settings()
         _ensure_path_privileges(settings.paths.run)
-        result = update_ip_lists(settings, verbose=verbose, console=console, timeout=timeout)
+        result = update_ip_lists(
+            settings,
+            selected_sources=sources,
+            verbose=verbose,
+            console=console,
+            timeout=timeout,
+        )
+        if not result.failures:
+            enqueue_event(settings, "route-refresh")
     except (OSError, RuntimeError, ValueError) as exc:
         error_console.print(f"[red]ip-list update failed:[/red] {exc}")
         raise SystemExit(1) from exc

@@ -10,6 +10,7 @@ import yaml
 from pydantic import ValidationError
 
 from dros.config_objects import (
+    ConfigMapConfig,
     ConfigObject,
     DockerAppConfig,
     DockerAppFileConfig,
@@ -152,7 +153,7 @@ def _validate_container(
     _validate_single_line(obj, "spec.image", config.image, errors)
     _validate_network(context, obj, config.network, errors)
     _validate_common_container_fields(obj, config, errors)
-    _validate_mounts(obj, config.mounts, errors, path_prefix="spec.mounts")
+    _validate_mounts(context, obj, config.mounts, errors, path_prefix="spec.mounts")
 
 
 def _validate_app(
@@ -185,7 +186,7 @@ def _validate_app(
     if config.nginx_conf_file is not None:
         _validate_app_file(obj, config.nginx_conf_file, errors, "spec.nginxConfFile")
     _validate_app_files(obj, config.conf_files, errors, path_prefix="spec.confFiles")
-    _validate_mounts(obj, config.mounts, errors, path_prefix="spec.mounts")
+    _validate_mounts(context, obj, config.mounts, errors, path_prefix="spec.mounts")
 
 
 def _validate_common_container_fields(
@@ -259,6 +260,7 @@ def _validate_network(
 
 
 def _validate_mounts(
+    context: UpdateContext,
     obj: ConfigObject,
     mounts: list[DockerMountConfig],
     errors: list[str],
@@ -266,10 +268,11 @@ def _validate_mounts(
     path_prefix: str,
 ) -> None:
     for index, mount in enumerate(mounts):
-        _validate_mount(obj, mount, errors, f"{path_prefix}[{index}]")
+        _validate_mount(context, obj, mount, errors, f"{path_prefix}[{index}]")
 
 
 def _validate_mount(
+    context: UpdateContext,
     obj: ConfigObject,
     mount: DockerMountConfig,
     errors: list[str],
@@ -282,8 +285,27 @@ def _validate_mount(
         _validate_single_line(obj, f"{path_prefix}.name", mount.name, errors)
     if mount.source is not None and mount.source_type != "inline":
         _validate_single_line(obj, f"{path_prefix}.source", mount.source, errors)
-    if mount.source_type in {"inline", "file", "dir"} and mount.source is None:
+    if mount.key is not None:
+        _validate_single_line(obj, f"{path_prefix}.key", mount.key, errors)
+    if mount.source_type in {"inline", "file", "dir", "configMap"} and mount.source is None:
         errors.append(f"{obj.kind}/{obj.name}: {path_prefix}.source is required for {mount.source_type}")
+    if mount.source_type == "configMap" and not mount.key:
+        errors.append(f"{obj.kind}/{obj.name}: {path_prefix}.key is required for configMap")
+    if mount.source_type == "configMap" and mount.source and mount.key:
+        config_map = context.configs.get("ConfigMap", mount.source)
+        if config_map is None:
+            errors.append(f"{obj.kind}/{obj.name}: {path_prefix}.source references undefined ConfigMap/{mount.source}")
+        else:
+            try:
+                config = context.configs.resolve_object(config_map, ConfigMapConfig)
+            except ValidationError as exc:
+                errors.append(f"{obj.kind}/{obj.name}: ConfigMap/{mount.source} is invalid: {exc}")
+            else:
+                if mount.key not in config.files:
+                    errors.append(
+                        f"{obj.kind}/{obj.name}: {path_prefix}.key references missing "
+                        f"ConfigMap/{mount.source} file {mount.key!r}"
+                    )
 
 
 def _validate_app_files(
@@ -305,6 +327,10 @@ def _validate_app_file(
 ) -> None:
     if item.source_type != "inline":
         _validate_single_line(obj, f"{path_prefix}.source", item.source, errors)
+    if item.key is not None:
+        _validate_single_line(obj, f"{path_prefix}.key", item.key, errors)
+    if item.source_type == "configMap" and not item.key:
+        errors.append(f"{obj.kind}/{obj.name}: {path_prefix}.key is required for configMap")
     if item.name is not None:
         _validate_single_line(obj, f"{path_prefix}.name", item.name, errors)
     target = getattr(item, "target", None)
@@ -408,6 +434,7 @@ def _nginx_conf_mount(
         {
             "sourceType": config.source_type,
             "source": config.source,
+            "key": config.key,
             "target": NGINX_CONF_TARGETS[variant],
             "mode": config.mode,
             "name": config.name,
@@ -427,6 +454,7 @@ def _nginx_conf_file_mounts(configs: list[DockerAppFileConfig]) -> list[DockerMo
                 {
                     "sourceType": config.source_type,
                     "source": config.source,
+                    "key": config.key,
                     "target": target,
                     "mode": config.mode,
                     "name": config.name,
@@ -673,7 +701,27 @@ def _mount_source(
         name = mount.name or Path(mount.target).name or f"inline-{index}"
         path = root / "generated" / "inline" / name
         return path, RenderedFile(path=path, content=str(mount.source)), [path.parent]
+    if mount.source_type == "configMap":
+        config_map_name = str(mount.source)
+        key = str(mount.key or "")
+        content = _configmap_file_content(context, config_map_name, key)
+        path = root / "generated" / "configmap" / _safe_path_segment(config_map_name) / key
+        return path, RenderedFile(path=path, content=content), [path.parent]
     raise ValueError(f"unsupported mount sourceType {mount.source_type!r}")
+
+
+def _configmap_file_content(context: UpdateContext, name: str, key: str) -> str:
+    obj = context.configs.get("ConfigMap", name)
+    if obj is None:
+        raise ValueError(f"ConfigMap/{name} is not defined")
+    config = context.configs.resolve_object(obj, ConfigMapConfig)
+    if key not in config.files:
+        raise ValueError(f"ConfigMap/{name} does not contain file {key!r}")
+    return config.files[key]
+
+
+def _safe_path_segment(value: str) -> str:
+    return "".join(char if char.isalnum() or char in "._-" else "_" for char in value)
 
 
 def _container_relative(root: Path, source: str) -> Path:

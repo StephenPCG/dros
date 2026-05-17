@@ -54,7 +54,7 @@ spec:
 
 ### `apiVersion`
 
-当前建议写 `dros/v1alpha1`。loader 现阶段会忽略该字段。
+当前建议写 `dros/v1alpha1`。如果写了该字段，当前必须为 `dros/v1alpha1`；省略时按当前版本处理。
 
 默认值：无。
 
@@ -112,6 +112,20 @@ gw ip-list list
 ```sh
 gw ip-list update
 ```
+
+列出内置可下载 source：
+
+```sh
+gw ip-list sources
+```
+
+只更新部分 source：
+
+```sh
+gw ip-list update china github
+```
+
+`gw ip-list update` 成功后会向 drosd 队列写入 `route-refresh` 事件，由 daemon 后续刷新路由。
 
 ## 加载优先级
 

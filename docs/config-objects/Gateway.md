@@ -45,7 +45,7 @@ spec:
 
 ### `apiVersion`
 
-当前建议写 `dros/v1alpha1`。loader 现阶段会忽略该字段。
+当前建议写 `dros/v1alpha1`。如果写了该字段，当前必须为 `dros/v1alpha1`；省略时按当前版本处理。
 
 默认值：无。
 

@@ -45,15 +45,42 @@ paths:
         encoding="utf-8",
     )
 
-    def fake_update_ip_lists(settings, *, verbose, console, timeout):  # type: ignore[no-untyped-def]
+    queued: list[tuple[str, str | None]] = []
+
+    def fake_update_ip_lists(settings, *, verbose, console, timeout, selected_sources=None):  # type: ignore[no-untyped-def]
         assert settings.paths.run == run
         assert verbose == 2
         assert timeout == 10.0
+        assert selected_sources == ["china"]
         return SimpleNamespace(failures=[])
 
     monkeypatch.setattr(cli_main, "update_ip_lists", fake_update_ip_lists)
+    monkeypatch.setattr(
+        cli_main,
+        "enqueue_event",
+        lambda _settings, event, iface=None: queued.append((event, iface)),
+    )
 
     assert cli_main.main(
-        ["--settings", str(settings_file), "ip-list", "update", "--verbose", "2", "--timeout", "10"]
+        [
+            "--settings",
+            str(settings_file),
+            "ip-list",
+            "update",
+            "china",
+            "--verbose",
+            "2",
+            "--timeout",
+            "10",
+        ]
     ) == 0
     assert "ip lists updated" in capsys.readouterr().out
+    assert queued == [("route-refresh", None)]
+
+
+def test_ip_list_sources_command_lists_builtin_sources(capsys) -> None:
+    assert cli_main.main(["ip-list", "sources"]) == 0
+
+    output = capsys.readouterr().out
+    assert "china" in output
+    assert "github" in output

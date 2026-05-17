@@ -1,0 +1,276 @@
+from __future__ import annotations
+
+import ipaddress
+from dataclasses import dataclass
+
+from pydantic import ValidationError
+
+from dros.config_objects import ConfigObject, XfrmTransportConfig
+from dros.plugins.base import DrosPlugin, UpdateContext
+
+
+def create_plugin() -> DrosPlugin:
+    return DrosPlugin(
+        name="network.xfrm",
+        config_kinds=frozenset({"XfrmTransport"}),
+        validation_hook=validate,
+        update_hook=update,
+    )
+
+
+@dataclass(frozen=True)
+class XfrmEndpoint:
+    party: str
+    public_ip: str
+    private_ip: str
+
+
+@dataclass(frozen=True)
+class XfrmMaterial:
+    spi: str
+    reqid: str
+    key: str
+
+
+@dataclass(frozen=True)
+class XfrmTransport:
+    name: str
+    selector_proto: str
+    local: XfrmEndpoint
+    remote: XfrmEndpoint
+    to_remote: XfrmMaterial
+    from_remote: XfrmMaterial
+    aead_name: str
+    aead_icv_bits: int
+
+
+def validate(context: UpdateContext, objects: list[ConfigObject]) -> list[str]:
+    errors: list[str] = []
+    for obj in objects:
+        config = _validate_model(context, obj, errors)
+        if config is None:
+            continue
+        _validate_transport(obj, config, errors)
+    return errors
+
+
+def update(context: UpdateContext, objects: list[ConfigObject]) -> None:
+    for obj in sorted(objects, key=lambda item: item.name):
+        config = context.configs.resolve_object(obj, XfrmTransportConfig)
+        if config.enabled:
+            start_xfrm(context, obj.name, config)
+        else:
+            stop_xfrm(context, obj.name, config)
+
+
+def start_xfrm(context: UpdateContext, name: str, config: XfrmTransportConfig) -> None:
+    transport = _resolve_transport(name, config)
+    _stop_transport(context, transport)
+    for command in (
+        _state_add_command(transport, outgoing=True),
+        _state_add_command(transport, outgoing=False),
+        _policy_add_command(transport, outgoing=True),
+        _policy_add_command(transport, outgoing=False),
+    ):
+        context.executor.run(command, real_only=True)
+
+
+def stop_xfrm(context: UpdateContext, name: str, config: XfrmTransportConfig) -> None:
+    _stop_transport(context, _resolve_transport(name, config))
+
+
+def _stop_transport(context: UpdateContext, transport: XfrmTransport) -> None:
+    for command in (
+        _policy_delete_command(transport, outgoing=True),
+        _policy_delete_command(transport, outgoing=False),
+        _state_delete_command(transport, outgoing=True),
+        _state_delete_command(transport, outgoing=False),
+    ):
+        context.executor.run(command, check=False, real_only=True, quiet=True)
+
+
+def _validate_model(
+    context: UpdateContext,
+    obj: ConfigObject,
+    errors: list[str],
+) -> XfrmTransportConfig | None:
+    try:
+        return context.configs.resolve_object(obj, XfrmTransportConfig)
+    except ValidationError as exc:
+        for error in exc.errors():
+            location = ".".join(str(part) for part in error["loc"])
+            errors.append(f"{obj.kind}/{obj.name}: spec.{location}: {error['msg']}")
+        return None
+
+
+def _validate_transport(
+    obj: ConfigObject,
+    config: XfrmTransportConfig,
+    errors: list[str],
+) -> None:
+    for label, value in (
+        ("partyA.publicIp", config.party_a.public_ip),
+        ("partyB.publicIp", config.party_b.public_ip),
+        ("partyA.privateIp", config.party_a.private_ip),
+        ("partyB.privateIp", config.party_b.private_ip),
+    ):
+        if value is None:
+            continue
+        try:
+            ipaddress.ip_address(value)
+        except ValueError as exc:
+            errors.append(f"XfrmTransport/{obj.name}: spec.{label} is not an IP address: {exc}")
+    for label, value in (
+        ("spi.partyAToPartyB", config.spi.party_a_to_party_b),
+        ("spi.partyBToPartyA", config.spi.party_b_to_party_a),
+        ("reqid.partyAToPartyB", config.reqid.party_a_to_party_b),
+        ("reqid.partyBToPartyA", config.reqid.party_b_to_party_a),
+    ):
+        try:
+            _format_u32(value)
+        except ValueError as exc:
+            errors.append(f"XfrmTransport/{obj.name}: spec.{label} must be a 32-bit value: {exc}")
+    if config.aead.icv_bits <= 0:
+        errors.append(f"XfrmTransport/{obj.name}: spec.aead.icvBits must be positive")
+
+
+def _resolve_transport(name: str, config: XfrmTransportConfig) -> XfrmTransport:
+    local_party = config.local_party
+    remote_party = "partyB" if local_party == "partyA" else "partyA"
+    forward_attr = "party_a_to_party_b" if local_party == "partyA" else "party_b_to_party_a"
+    reverse_attr = "party_b_to_party_a" if local_party == "partyA" else "party_a_to_party_b"
+    return XfrmTransport(
+        name=name,
+        selector_proto=config.selector.proto,
+        local=_endpoint(local_party, config),
+        remote=_endpoint(remote_party, config),
+        to_remote=_material(config, forward_attr),
+        from_remote=_material(config, reverse_attr),
+        aead_name=config.aead.name,
+        aead_icv_bits=config.aead.icv_bits,
+    )
+
+
+def _endpoint(party: str, config: XfrmTransportConfig) -> XfrmEndpoint:
+    party_config = config.party_a if party == "partyA" else config.party_b
+    return XfrmEndpoint(
+        party=party,
+        public_ip=party_config.public_ip,
+        private_ip=party_config.private_ip or party_config.public_ip,
+    )
+
+
+def _material(config: XfrmTransportConfig, attr: str) -> XfrmMaterial:
+    return XfrmMaterial(
+        spi=_format_u32(getattr(config.spi, attr)),
+        reqid=_format_u32(getattr(config.reqid, attr)),
+        key=getattr(config.keys, attr),
+    )
+
+
+def _state_add_command(transport: XfrmTransport, *, outgoing: bool) -> list[str]:
+    src, dst, material = _direction(transport, outgoing=outgoing)
+    return [
+        "ip",
+        "xfrm",
+        "state",
+        "add",
+        "src",
+        src,
+        "dst",
+        dst,
+        "proto",
+        "esp",
+        "spi",
+        material.spi,
+        "reqid",
+        material.reqid,
+        "mode",
+        "transport",
+        "aead",
+        transport.aead_name,
+        material.key,
+        str(transport.aead_icv_bits),
+        "sel",
+        "src",
+        _host_prefix(src),
+        "dst",
+        _host_prefix(dst),
+        "proto",
+        transport.selector_proto,
+    ]
+
+
+def _state_delete_command(transport: XfrmTransport, *, outgoing: bool) -> list[str]:
+    src, dst, material = _direction(transport, outgoing=outgoing)
+    return [
+        "sh",
+        "-c",
+        'ip xfrm state delete src "$1" dst "$2" proto esp spi "$3" 2>/dev/null || true',
+        "sh",
+        src,
+        dst,
+        material.spi,
+    ]
+
+
+def _policy_add_command(transport: XfrmTransport, *, outgoing: bool) -> list[str]:
+    src, dst, material = _direction(transport, outgoing=outgoing)
+    return [
+        "ip",
+        "xfrm",
+        "policy",
+        "add",
+        "dir",
+        "out" if outgoing else "in",
+        "src",
+        _host_prefix(src),
+        "dst",
+        _host_prefix(dst),
+        "proto",
+        transport.selector_proto,
+        "tmpl",
+        "src",
+        src,
+        "dst",
+        dst,
+        "proto",
+        "esp",
+        "reqid",
+        material.reqid,
+        "mode",
+        "transport",
+    ]
+
+
+def _policy_delete_command(transport: XfrmTransport, *, outgoing: bool) -> list[str]:
+    src, dst, _material = _direction(transport, outgoing=outgoing)
+    return [
+        "sh",
+        "-c",
+        'ip xfrm policy delete dir "$1" src "$2" dst "$3" proto "$4" 2>/dev/null || true',
+        "sh",
+        "out" if outgoing else "in",
+        _host_prefix(src),
+        _host_prefix(dst),
+        transport.selector_proto,
+    ]
+
+
+def _direction(transport: XfrmTransport, *, outgoing: bool) -> tuple[str, str, XfrmMaterial]:
+    if outgoing:
+        return transport.local.private_ip, transport.remote.public_ip, transport.to_remote
+    return transport.remote.public_ip, transport.local.private_ip, transport.from_remote
+
+
+def _host_prefix(value: str) -> str:
+    address = ipaddress.ip_address(value)
+    prefix = 32 if address.version == 4 else 128
+    return f"{address}/{prefix}"
+
+
+def _format_u32(value: object) -> str:
+    parsed = int(str(value), 0) if not isinstance(value, int) else value
+    if not 0 <= parsed <= 0xFFFFFFFF:
+        raise ValueError(f"not a 32-bit value: {value}")
+    return f"0x{parsed:08x}"

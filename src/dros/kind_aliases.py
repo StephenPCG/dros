@@ -10,6 +10,11 @@ KIND_ALIASES: dict[str, str] = {
     "chinanames": "DnsmasqChinaNames",
     "collectd": "Collectd",
     "collectds": "Collectd",
+    "configmap": "ConfigMap",
+    "configmaps": "ConfigMap",
+    "cron": "CronJob",
+    "cronjob": "CronJob",
+    "cronjobs": "CronJob",
     "dnsmasqchinaname": "DnsmasqChinaNames",
     "dnsmasqchinanames": "DnsmasqChinaNames",
     "dnsmasqdhcp": "DnsmasqDHCP",
@@ -61,6 +66,10 @@ KIND_ALIASES: dict[str, str] = {
     "rulesets": "RouteRuleSet",
     "systemmirrorconfig": "SystemMirrorConfig",
     "systemnetworkconfig": "SystemNetworkConfig",
+    "xfrm": "XfrmTransport",
+    "xfrms": "XfrmTransport",
+    "xfrmtransport": "XfrmTransport",
+    "xfrmtransports": "XfrmTransport",
 }
 
 KIND_GROUPS: dict[str, frozenset[str]] = {

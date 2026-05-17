@@ -24,6 +24,7 @@ from dros.ovpn import (
 )
 from dros.settings import DrosSettings
 from dros.web.auth import COOKIE_NAME, WebAuthStore, resolve_auth_db_path
+from dros.web.monitor import collect_monitor_summary
 
 
 class LoginRequest(BaseModel):
@@ -125,6 +126,10 @@ def create_app(settings: DrosSettings | None = None) -> FastAPI:
                 for item in list_instances_summary(settings)
             ]
         }
+
+    @api.get("/api/monitor/summary")
+    def monitor_summary(_username: str = Depends(require_auth)) -> dict[str, object]:
+        return collect_monitor_summary(settings)
 
     @api.get("/api/openvpn/instances/{instance}/profiles")
     def openvpn_profiles(

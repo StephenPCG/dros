@@ -73,6 +73,58 @@ spec:
   mask: "0x0000ff00"
 """,
     ),
+    "XfrmTransport": ConfigObjectCatalogEntry(
+        kind="XfrmTransport",
+        example="""apiVersion: dros/v1alpha1
+kind: XfrmTransport
+metadata:
+  name: office
+spec:
+  localParty: partyA
+  partyA:
+    publicIp: 198.51.100.1
+    privateIp: 10.0.0.1
+  partyB:
+    publicIp: 203.0.113.1
+  spi:
+    partyAToPartyB: "0x100"
+    partyBToPartyA: "0x101"
+  reqid:
+    partyAToPartyB: 100
+    partyBToPartyA: 101
+  keys:
+    partyAToPartyB: "0x00112233445566778899aabbccddeeff00112233"
+    partyBToPartyA: "0xffeeddccbbaa99887766554433221100ffeeddcc"
+""",
+    ),
+    "ConfigMap": ConfigObjectCatalogEntry(
+        kind="ConfigMap",
+        example="""apiVersion: dros/v1alpha1
+kind: ConfigMap
+metadata:
+  name: nginx-config
+spec:
+  files:
+    default.conf: |
+      server {
+        listen 80;
+      }
+""",
+    ),
+    "CronJob": ConfigObjectCatalogEntry(
+        kind="CronJob",
+        example="""apiVersion: dros/v1alpha1
+kind: CronJob
+metadata:
+  name: refresh-routes
+spec:
+  schedule: "*/10 * * * *"
+  user: root
+  command: /usr/local/bin/gw hook route-refresh --verbose 0
+  environment:
+    PATH: /usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+""",
+    ),
     "Gateway": ConfigObjectCatalogEntry(
         kind="Gateway",
         example="""apiVersion: dros/v1alpha1

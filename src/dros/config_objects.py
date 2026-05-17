@@ -7,13 +7,19 @@ from typing import Any, Literal, TypeVar
 import yaml
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field
 
+from dros.kind_aliases import resolve_kind_alias
 from dros.settings import DrosSettings
 
+API_VERSION = "dros/v1alpha1"
 DEFAULT_OBJECT_NAME = "default"
 
 
+class ConfigObjectLoadError(ValueError):
+    pass
+
+
 class SystemNetworkConfig(BaseModel):
-    model_config = ConfigDict(extra="ignore", populate_by_name=True)
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
     hostname: str = "gateway"
     domain: str = "lan"
@@ -21,7 +27,7 @@ class SystemNetworkConfig(BaseModel):
 
 
 class SystemMirrorConfig(BaseModel):
-    model_config = ConfigDict(extra="ignore", populate_by_name=True)
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
     apt_mirror: str = Field("https://mirrors.ustc.edu.cn/debian", alias="aptMirror")
     docker_apt_mirror: str = Field(
@@ -32,20 +38,20 @@ class SystemMirrorConfig(BaseModel):
 
 
 class DevGroupConfig(BaseModel):
-    model_config = ConfigDict(extra="ignore", populate_by_name=True)
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
     id: int
 
 
 class FwMarkConfig(BaseModel):
-    model_config = ConfigDict(extra="ignore", populate_by_name=True)
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
     mark: int | str = Field(validation_alias=AliasChoices("mark", "value"))
     mask: int | str = "0xffffffff"
 
 
 class GatewayHopConfig(BaseModel):
-    model_config = ConfigDict(extra="ignore", populate_by_name=True)
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
     dev: str
     via: str | None = None
@@ -54,7 +60,7 @@ class GatewayHopConfig(BaseModel):
 
 
 class GatewayConfig(BaseModel):
-    model_config = ConfigDict(extra="ignore", populate_by_name=True)
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
     dev: str | None = None
     via: str | None = None
@@ -64,7 +70,7 @@ class GatewayConfig(BaseModel):
 
 
 class RouteConfig(BaseModel):
-    model_config = ConfigDict(extra="ignore", populate_by_name=True)
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
     to: str | None = None
     gateway: str | None = None
@@ -74,7 +80,7 @@ class RouteConfig(BaseModel):
 
 
 class RouteTableConfig(BaseModel):
-    model_config = ConfigDict(extra="ignore", populate_by_name=True)
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
     family: Literal["ipv4", "ipv6"] = "ipv4"
     table: int | str = Field(validation_alias=AliasChoices("table", "id"))
@@ -82,14 +88,14 @@ class RouteTableConfig(BaseModel):
 
 
 class ManagedPriorityConfig(BaseModel):
-    model_config = ConfigDict(extra="ignore", populate_by_name=True)
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
     start: int
     end: int
 
 
 class RouteRuleConfig(BaseModel):
-    model_config = ConfigDict(extra="ignore", populate_by_name=True)
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
     priority: int
     lookup: int | str | None = None
@@ -111,7 +117,7 @@ class RouteRuleConfig(BaseModel):
 
 
 class RouteRuleSetConfig(BaseModel):
-    model_config = ConfigDict(extra="ignore", populate_by_name=True)
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
     family: Literal["ipv4", "ipv6"] = "ipv4"
     managed_priority: ManagedPriorityConfig = Field(
@@ -121,7 +127,7 @@ class RouteRuleSetConfig(BaseModel):
 
 
 class FirewallConfig(BaseModel):
-    model_config = ConfigDict(extra="ignore", populate_by_name=True)
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
     defaults: dict[str, Any] = Field(default_factory=dict)
     interface_rules: list[dict[str, Any]] = Field(
@@ -143,14 +149,31 @@ class FirewallConfig(BaseModel):
 
 
 class IpListUpdaterConfig(BaseModel):
-    model_config = ConfigDict(extra="ignore", populate_by_name=True)
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
     enabled: bool = True
     schedule: str = Field("0 1 *", validation_alias=AliasChoices("schedule", "cron"))
 
 
+class CronJobConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+    enabled: bool = True
+    schedule: str
+    user: str = "root"
+    command: str
+    environment: dict[str, str] = Field(default_factory=dict)
+    comment: str | None = None
+
+
+class ConfigMapConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+    files: dict[str, str] = Field(default_factory=dict)
+
+
 class DnsmasqDNSConfig(BaseModel):
-    model_config = ConfigDict(extra="ignore", populate_by_name=True)
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
     enabled: bool = True
     interfaces: list[str] = Field(default_factory=list)
@@ -217,7 +240,7 @@ class DnsmasqDNSConfig(BaseModel):
 
 
 class DnsmasqDHCPRangeConfig(BaseModel):
-    model_config = ConfigDict(extra="ignore", populate_by_name=True)
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
     tag: str
     start: str
@@ -230,7 +253,7 @@ class DnsmasqDHCPRangeConfig(BaseModel):
 
 
 class DnsmasqDHCPConfig(BaseModel):
-    model_config = ConfigDict(extra="ignore", populate_by_name=True)
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
     enabled: bool = True
     authoritative: bool = False
@@ -254,11 +277,15 @@ class DnsmasqDHCPConfig(BaseModel):
 
 
 class DnsmasqChinaNamesConfig(BaseModel):
-    model_config = ConfigDict(extra="ignore", populate_by_name=True)
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
     enabled: bool = True
     servers: list[str] = Field(default_factory=list)
     files: list[str] = Field(default_factory=list)
+    output_dir: str | None = Field(
+        None,
+        validation_alias=AliasChoices("output_dir", "outputDir"),
+    )
     manual_names: list[str] = Field(
         default_factory=list,
         validation_alias=AliasChoices("manual_names", "manualNames"),
@@ -276,27 +303,27 @@ class DnsmasqChinaNamesConfig(BaseModel):
 
 
 class CollectdInterfacePluginConfig(BaseModel):
-    model_config = ConfigDict(extra="ignore", populate_by_name=True)
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
     enabled: bool = True
     ignore: list[str] = Field(default_factory=lambda: ["/^veth/"])
 
 
 class CollectdPingPluginConfig(BaseModel):
-    model_config = ConfigDict(extra="ignore", populate_by_name=True)
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
     enabled: bool = False
     hosts: list[str] = Field(default_factory=list)
 
 
 class CollectdSensorsPluginConfig(BaseModel):
-    model_config = ConfigDict(extra="ignore", populate_by_name=True)
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
     enabled: bool = False
 
 
 class CollectdPluginsConfig(BaseModel):
-    model_config = ConfigDict(extra="ignore", populate_by_name=True)
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
     interface: CollectdInterfacePluginConfig = Field(
         default_factory=CollectdInterfacePluginConfig
@@ -308,7 +335,7 @@ class CollectdPluginsConfig(BaseModel):
 
 
 class CollectdConfig(BaseModel):
-    model_config = ConfigDict(extra="ignore", populate_by_name=True)
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
     enabled: bool = True
     interval: int = Field(10, ge=1)
@@ -329,7 +356,7 @@ class CollectdConfig(BaseModel):
 
 
 class ResolvConfConfig(BaseModel):
-    model_config = ConfigDict(extra="ignore", populate_by_name=True)
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
     nameservers: list[str] = Field(default_factory=list)
     search: list[str] = Field(default_factory=list)
@@ -337,7 +364,7 @@ class ResolvConfConfig(BaseModel):
 
 
 class IPv6PDDownstreamConfig(BaseModel):
-    model_config = ConfigDict(extra="ignore", populate_by_name=True)
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
     iface: str
     subnet_id: int = Field(validation_alias=AliasChoices("subnet_id", "subnetId"))
@@ -357,7 +384,7 @@ class IPv6PDDownstreamConfig(BaseModel):
 
 
 class IPv6PDConfig(BaseModel):
-    model_config = ConfigDict(extra="ignore", populate_by_name=True)
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
     enabled: bool = True
     client: Literal["wide-dhcpv6"] = "wide-dhcpv6"
@@ -392,42 +419,45 @@ class IPv6PDConfig(BaseModel):
 
 
 class DockerMountConfig(BaseModel):
-    model_config = ConfigDict(extra="ignore", populate_by_name=True)
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
-    source_type: Literal["inline", "file", "dir", "data-dir"] = Field(
+    source_type: Literal["configMap", "inline", "file", "dir", "data-dir"] = Field(
         validation_alias=AliasChoices("source_type", "sourceType"),
     )
     source: str | None = None
+    key: str | None = None
     target: str
     mode: Literal["ro", "rw"] = "rw"
     name: str | None = None
 
 
 class DockerAppFileConfig(BaseModel):
-    model_config = ConfigDict(extra="ignore", populate_by_name=True)
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
-    source_type: Literal["inline", "file", "dir"] = Field(
+    source_type: Literal["configMap", "inline", "file", "dir"] = Field(
         validation_alias=AliasChoices("source_type", "sourceType"),
     )
     source: str
+    key: str | None = None
     target: str | None = None
     mode: Literal["ro", "rw"] = "ro"
     name: str | None = None
 
 
 class DockerAppNginxConfFileConfig(BaseModel):
-    model_config = ConfigDict(extra="ignore", populate_by_name=True)
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
-    source_type: Literal["inline", "file"] = Field(
+    source_type: Literal["configMap", "inline", "file"] = Field(
         validation_alias=AliasChoices("source_type", "sourceType"),
     )
     source: str
+    key: str | None = None
     mode: Literal["ro", "rw"] = "ro"
     name: str | None = None
 
 
 class DockerContainerConfig(BaseModel):
-    model_config = ConfigDict(extra="ignore", populate_by_name=True)
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
     enabled: bool = True
     image: str
@@ -457,7 +487,7 @@ class DockerContainerConfig(BaseModel):
 
 
 class DockerAppConfig(BaseModel):
-    model_config = ConfigDict(extra="ignore", populate_by_name=True)
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
     enabled: bool = True
     app: Literal["vlmcsd", "nginx", "ddns-go", "unifi", "certimate"]
@@ -493,7 +523,7 @@ class DockerAppConfig(BaseModel):
 
 
 class DockerDNSConfig(BaseModel):
-    model_config = ConfigDict(extra="ignore", populate_by_name=True)
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
     enabled: bool = True
     suffix: str = "containers.lan"
@@ -508,22 +538,108 @@ class DockerDNSConfig(BaseModel):
     )
 
 
+class XfrmTransportSelectorConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+    proto: Literal["gre"] = "gre"
+
+
+class XfrmTransportPartyConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+    name: str | None = None
+    public_ip: str = Field(validation_alias=AliasChoices("public_ip", "publicIp"))
+    private_ip: str | None = Field(
+        None,
+        validation_alias=AliasChoices("private_ip", "privateIp"),
+    )
+
+
+class XfrmTransportDirectionConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+    party_a_to_party_b: int | str = Field(
+        validation_alias=AliasChoices("party_a_to_party_b", "partyAToPartyB"),
+    )
+    party_b_to_party_a: int | str = Field(
+        validation_alias=AliasChoices("party_b_to_party_a", "partyBToPartyA"),
+    )
+
+
+class XfrmTransportKeysConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+    party_a_to_party_b: str = Field(
+        validation_alias=AliasChoices("party_a_to_party_b", "partyAToPartyB"),
+    )
+    party_b_to_party_a: str = Field(
+        validation_alias=AliasChoices("party_b_to_party_a", "partyBToPartyA"),
+    )
+
+
+class XfrmTransportAeadConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+    name: Literal["rfc4106(gcm(aes))"] = "rfc4106(gcm(aes))"
+    icv_bits: int = Field(128, validation_alias=AliasChoices("icv_bits", "icvBits"))
+
+
+class XfrmTransportConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+    enabled: bool = True
+    activation: Literal["manual", "system"] = "manual"
+    local_party: Literal["partyA", "partyB"] = Field(
+        validation_alias=AliasChoices("local_party", "localParty"),
+    )
+    selector: XfrmTransportSelectorConfig = Field(
+        default_factory=XfrmTransportSelectorConfig
+    )
+    party_a: XfrmTransportPartyConfig = Field(
+        validation_alias=AliasChoices("party_a", "partyA"),
+    )
+    party_b: XfrmTransportPartyConfig = Field(
+        validation_alias=AliasChoices("party_b", "partyB"),
+    )
+    spi: XfrmTransportDirectionConfig
+    reqid: XfrmTransportDirectionConfig
+    keys: XfrmTransportKeysConfig
+    aead: XfrmTransportAeadConfig = Field(default_factory=XfrmTransportAeadConfig)
+
+
+class WireGuardWgsdClientConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+    enabled: bool = True
+    dns: str
+    zone: str
+    schedule: str = "* * * * *"
+
+
 class InterfaceConfig(BaseModel):
-    model_config = ConfigDict(extra="ignore", populate_by_name=True)
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
     type: Literal[
         "eth",
+        "ethernet",
         "bridge",
         "vlan",
         "loopback",
+        "external",
         "docker",
         "gre",
         "pppoe",
         "wireguard",
         "openvpn",
     ]
+    auto: bool = True
+    allow_hotplug: bool = Field(
+        False,
+        validation_alias=AliasChoices("allow_hotplug", "allowHotplug"),
+    )
     dhcp: bool = False
     address: str | None = None
+    addresses: list[str] = Field(default_factory=list)
     gateway: str | None = None
     extra_addresses: list[str] = Field(
         default_factory=list,
@@ -537,6 +653,11 @@ class InterfaceConfig(BaseModel):
     vlan_aware: bool = Field(
         False,
         validation_alias=AliasChoices("vlan_aware", "vlanAware"),
+    )
+    stp: bool = False
+    forward_delay: int = Field(
+        0,
+        validation_alias=AliasChoices("forward_delay", "forwardDelay"),
     )
     parent: str | None = None
     id: int | None = None
@@ -580,6 +701,10 @@ class InterfaceConfig(BaseModel):
     )
     noipdefault: bool = True
     defaultroute: bool = True
+    defaultroute6: bool = True
+    nodefaultroute: bool = False
+    nodefaultroute6: bool = False
+    noreplacedefaultroute: bool = False
     replacedefaultroute: bool = False
     noproxyarp: bool = True
     ipv6: bool = True
@@ -604,6 +729,10 @@ class InterfaceConfig(BaseModel):
         validation_alias=AliasChoices("listen_port", "listenPort"),
     )
     peers: list[dict[str, Any]] = Field(default_factory=list)
+    wgsd_client: WireGuardWgsdClientConfig | None = Field(
+        None,
+        validation_alias=AliasChoices("wgsd_client", "wgsdClient"),
+    )
     config: str | None = None
     config_file: str | None = Field(
         None,
@@ -689,15 +818,27 @@ def load_config_objects(settings: DrosSettings) -> ConfigStore:
         if not config_dir.exists():
             continue
         if not config_dir.is_dir():
-            raise ValueError(f"ConfigObject path is not a directory: {config_dir}")
+            raise ConfigObjectLoadError(f"ConfigObject path is not a directory: {config_dir}")
 
+        seen_in_dir: dict[ConfigObjectKey, ConfigObject] = {}
         for yaml_file in sorted(_iter_yaml_files(config_dir)):
-            for raw_doc in yaml.safe_load_all(yaml_file.read_text(encoding="utf-8")):
+            try:
+                documents = list(yaml.safe_load_all(yaml_file.read_text(encoding="utf-8")))
+            except Exception as exc:
+                raise ConfigObjectLoadError(f"{yaml_file}: failed to parse YAML: {exc}") from exc
+            for raw_doc in documents:
                 if raw_doc is None:
                     continue
                 obj = _parse_config_object(raw_doc, yaml_file)
                 if obj is None:
                     continue
+                previous = seen_in_dir.get(obj.key)
+                if previous is not None:
+                    raise ConfigObjectLoadError(
+                        f"{yaml_file}: duplicate {obj.kind}/{obj.name} already defined "
+                        f"in same config directory at {previous.source}"
+                    )
+                seen_in_dir[obj.key] = obj
                 objects[obj.key] = obj
     return ConfigStore(objects)
 
@@ -712,25 +853,34 @@ def _iter_yaml_files(config_dir: Path) -> list[Path]:
 
 def _parse_config_object(raw_doc: object, source: Path) -> ConfigObject | None:
     if not isinstance(raw_doc, dict):
-        raise ValueError(f"ConfigObject document must be a mapping: {source}")
+        raise ConfigObjectLoadError(f"ConfigObject document must be a mapping: {source}")
+
+    api_version = raw_doc.get("apiVersion")
+    if api_version is not None and api_version != API_VERSION:
+        raise ConfigObjectLoadError(
+            f"{source}: unsupported apiVersion {api_version!r}; expected {API_VERSION!r}"
+        )
 
     kind = raw_doc.get("kind")
     if not isinstance(kind, str) or not kind:
-        raise ValueError(f"ConfigObject document is missing kind: {source}")
+        raise ConfigObjectLoadError(f"ConfigObject document is missing kind: {source}")
+    kind = resolve_kind_alias(kind)
 
     metadata = raw_doc.get("metadata") or {}
     if not isinstance(metadata, dict):
-        raise ValueError(f"ConfigObject metadata must be a mapping: {source}")
+        raise ConfigObjectLoadError(f"ConfigObject metadata must be a mapping: {source}")
     if metadata.get("disabled") is True:
         return None
 
     raw_name = metadata.get("name", DEFAULT_OBJECT_NAME)
     if not isinstance(raw_name, str) or not raw_name:
-        raise ValueError(f"ConfigObject metadata.name must be a non-empty string: {source}")
+        raise ConfigObjectLoadError(
+            f"ConfigObject metadata.name must be a non-empty string: {source}"
+        )
 
     spec = raw_doc.get("spec") or {}
     if not isinstance(spec, dict):
-        raise ValueError(f"ConfigObject spec must be a mapping: {source}")
+        raise ConfigObjectLoadError(f"ConfigObject spec must be a mapping: {source}")
 
     return ConfigObject(
         kind=kind,

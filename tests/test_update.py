@@ -88,6 +88,7 @@ spec:
     assert "  up ip addr add 10.0.0.2/24 dev $IFACE\n" in content
     assert "  up ip addr add fd00::1/64 dev $IFACE\n" in content
     assert "  bridge_ports eth1 eth2\n" in content
+    assert "  bridge_stp off\n" in content
     assert "  bridge_fd 0\n" in content
     assert "  bridge_vlan_aware yes\n" in content
     assert "  post-up ip link set dev br0 group 2\n" in content
@@ -408,6 +409,28 @@ spec:
     assert _interface_file_exists(settings, "br0.4094")
 
 
+def test_update_rejects_unknown_config_fields(tmp_path: Path) -> None:
+    settings = _settings(tmp_path)
+    settings.paths.configs.mkdir(parents=True)
+    (settings.paths.configs / "network.yaml").write_text(
+        """
+apiVersion: dros/v1alpha1
+kind: Interface
+metadata:
+  name: eth0
+spec:
+  type: eth
+  typoField: true
+""".lstrip(),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(UpdateValidationError) as exc_info:
+        run_update(settings, target="iface/eth0", console=_console(StringIO()))
+
+    assert "typoField" in str(exc_info.value)
+
+
 def test_update_filters_target_aliases(tmp_path: Path) -> None:
     settings = _settings(tmp_path)
     settings.paths.configs.mkdir(parents=True)
@@ -636,6 +659,235 @@ spec:
     assert "ListenPort = 51820\n" in wg_conf
     assert "PublicKey = peer-key\n" in wg_conf
     assert "AllowedIPs = 10.20.0.2/32, fd00:20::2/128\n" in wg_conf
+
+
+def test_update_interface_supports_gwtool_compatible_fields(tmp_path: Path) -> None:
+    settings = _settings(tmp_path)
+    settings.paths.configs.mkdir(parents=True)
+    (settings.paths.configs / "network.yaml").write_text(
+        """
+apiVersion: dros/v1alpha1
+kind: DevGroup
+metadata:
+  name: wan
+spec:
+  id: 1
+---
+apiVersion: dros/v1alpha1
+kind: Interface
+metadata:
+  name: eth0
+spec:
+  type: ethernet
+  auto: false
+  allowHotplug: true
+  addresses:
+    - 192.0.2.2/24
+    - 192.0.2.3/24
+  gateway: 192.0.2.1
+  devGroup: wan
+---
+apiVersion: dros/v1alpha1
+kind: Interface
+metadata:
+  name: br0
+spec:
+  type: bridge
+  stp: true
+  forwardDelay: 2
+---
+apiVersion: dros/v1alpha1
+kind: Interface
+metadata:
+  name: external0
+spec:
+  type: external
+  extraAddresses:
+    - 198.51.100.10/32
+  devGroup: wan
+""".lstrip(),
+        encoding="utf-8",
+    )
+
+    result = run_update(settings, target="ifaces", console=_console(StringIO()))
+
+    eth = _interface_file(settings, "eth0").read_text(encoding="utf-8")
+    br = _interface_file(settings, "br0").read_text(encoding="utf-8")
+    commands = [" ".join(action.command or []) for action in result.actions]
+    assert "allow-hotplug eth0\n" in eth
+    assert "auto eth0\n" not in eth
+    assert "  address 192.0.2.2/24\n" in eth
+    assert "  up ip addr add 192.0.2.3/24 dev $IFACE\n" in eth
+    assert "  gateway 192.0.2.1\n" in eth
+    assert "  bridge_stp on\n" in br
+    assert "  bridge_fd 2\n" in br
+    assert not _interface_file_exists(settings, "external0")
+    assert any("ip link set dev external0 group 1" in command for command in commands)
+    assert any("ip addr replace 198.51.100.10/32 dev external0" in command for command in commands)
+
+
+def test_update_pppoe_renders_gwtool_route_flags(tmp_path: Path) -> None:
+    settings = _settings(tmp_path)
+    settings.paths.configs.mkdir(parents=True)
+    (settings.paths.configs / "pppoe.yaml").write_text(
+        """
+apiVersion: dros/v1alpha1
+kind: Interface
+metadata:
+  name: pppoe-wan
+spec:
+  type: pppoe
+  device: eth0
+  user: home@example.net
+  password: secret
+  nodefaultroute: true
+  nodefaultroute6: true
+  noreplacedefaultroute: true
+""".lstrip(),
+        encoding="utf-8",
+    )
+
+    run_update(settings, target="iface/pppoe-wan", console=_console(StringIO()))
+
+    peer = (settings.sys_root / "etc/ppp/peers/pppoe-wan").read_text(encoding="utf-8")
+    lines = set(peer.splitlines())
+    assert "nodefaultroute" in lines
+    assert "defaultroute" not in lines
+    assert "nodefaultroute6" in lines
+    assert "defaultroute6" not in lines
+    assert "noreplacedefaultroute" not in lines
+
+
+def test_update_xfrm_transport_renders_transport_mode_commands(tmp_path: Path) -> None:
+    settings = _settings(tmp_path)
+    settings.paths.configs.mkdir(parents=True)
+    (settings.paths.configs / "xfrm.yaml").write_text(
+        """
+apiVersion: dros/v1alpha1
+kind: XfrmTransport
+metadata:
+  name: office
+spec:
+  localParty: partyA
+  partyA:
+    publicIp: 198.51.100.1
+    privateIp: 10.0.0.1
+  partyB:
+    publicIp: 203.0.113.1
+  spi:
+    partyAToPartyB: "0x100"
+    partyBToPartyA: "0x101"
+  reqid:
+    partyAToPartyB: 100
+    partyBToPartyA: 101
+  keys:
+    partyAToPartyB: "0x00112233445566778899aabbccddeeff00112233"
+    partyBToPartyA: "0xffeeddccbbaa99887766554433221100ffeeddcc"
+""".lstrip(),
+        encoding="utf-8",
+    )
+
+    result = run_update(settings, target="xfrm/office", console=_console(StringIO()))
+
+    commands = [" ".join(action.command or []) for action in result.actions]
+    assert any("ip xfrm state add src 10.0.0.1 dst 203.0.113.1" in command for command in commands)
+    assert any("proto esp spi 0x00000100 reqid 0x00000064" in command for command in commands)
+    assert any("mode transport aead rfc4106(gcm(aes))" in command for command in commands)
+    assert any("ip xfrm policy add dir out src 10.0.0.1/32 dst 203.0.113.1/32 proto gre" in command for command in commands)
+
+
+def test_update_wireguard_expands_allowed_ips_and_writes_wgsd_cron(tmp_path: Path) -> None:
+    settings = _settings(tmp_path)
+    settings.paths.configs.mkdir(parents=True)
+    (settings.paths.configs / "ip-lists").mkdir()
+    (settings.paths.configs / "ip-lists/china.v4.txt").write_text(
+        "10.0.0.0/8\n",
+        encoding="utf-8",
+    )
+    (settings.paths.configs / "ip-lists/china.v6.txt").write_text(
+        "fd00::/8\n",
+        encoding="utf-8",
+    )
+    (settings.paths.configs / "wg.yaml").write_text(
+        """
+apiVersion: dros/v1alpha1
+kind: Interface
+metadata:
+  name: wg0
+spec:
+  type: wireguard
+  privateKey: private-key
+  peers:
+    - publicKey: peer-key
+      allowedIPs:
+        - china@v4
+        - china@v6
+        - 192.0.2.0/24
+        - china@all
+  wgsdClient:
+    dns: 127.0.0.1:53
+    zone: wg.example.
+    schedule: "*/5 * * * *"
+""".lstrip(),
+        encoding="utf-8",
+    )
+
+    run_update(settings, target="iface/wg0", console=_console(StringIO()))
+
+    wg_conf = (settings.sys_root / "etc/wireguard/wg0.conf").read_text(encoding="utf-8")
+    cron = (settings.sys_root / "etc/cron.d/dros-wgsd-client-wg0").read_text(
+        encoding="utf-8"
+    )
+    assert "AllowedIPs = 10.0.0.0/8, fd00::/8, 192.0.2.0/24\n" in wg_conf
+    assert "*/5 * * * * root /usr/local/bin/wgsd-client" in cron
+    assert "-device wg0 -dns 127.0.0.1:53 -zone wg.example." in cron
+
+
+def test_update_wireguard_uses_addconf_when_only_wireguard_conf_changes(tmp_path: Path) -> None:
+    settings = _settings(tmp_path)
+    settings.paths.configs.mkdir(parents=True)
+    config_path = settings.paths.configs / "wg.yaml"
+    config_path.write_text(
+        """
+apiVersion: dros/v1alpha1
+kind: Interface
+metadata:
+  name: wg0
+spec:
+  type: wireguard
+  address: 10.20.0.1/24
+  privateKey: private-key
+  peers:
+    - publicKey: peer-key
+      allowedIPs:
+        - 10.20.0.2/32
+""".lstrip(),
+        encoding="utf-8",
+    )
+    run_update(settings, target="iface/wg0", console=_console(StringIO()))
+    config_path.write_text(
+        """
+apiVersion: dros/v1alpha1
+kind: Interface
+metadata:
+  name: wg0
+spec:
+  type: wireguard
+  address: 10.20.0.1/24
+  privateKey: private-key
+  peers:
+    - publicKey: peer-key
+      allowedIPs:
+        - 10.20.0.3/32
+""".lstrip(),
+        encoding="utf-8",
+    )
+
+    result = run_update(settings, target="iface/wg0", console=_console(StringIO()))
+
+    commands = [" ".join(action.command or []) for action in result.actions if action.command]
+    assert any("wg addconf wg0 /etc/wireguard/wg0.conf" in command for command in commands)
+    assert not any(command == "ifdown --force wg0" for command in commands)
 
 
 def test_pppoe_interface_reload_uses_timeouts() -> None:

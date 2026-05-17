@@ -166,8 +166,9 @@ Docker DNS 名称列表。设置后会替换默认 `<metadata.name>.<DockerDNS.s
 
 ## `mounts[]`
 
-- `sourceType`：必填。可选 `inline`、`file`、`dir`、`data-dir`
-- `source`：来源。`inline` 时是文件内容；`file` / `dir` 时是宿主路径；`data-dir` 可省略
+- `sourceType`：必填。可选 `configMap`、`inline`、`file`、`dir`、`data-dir`
+- `source`：来源。`configMap` 时是 ConfigMap 名称；`inline` 时是文件内容；`file` / `dir` 时是宿主路径；`data-dir` 可省略
+- `key`：`sourceType: configMap` 时必填，表示 ConfigMap 中的文件 key
 - `target`：必填，容器内绝对路径
 - `mode`：`ro` 或 `rw`，默认 `rw`
 - `name`：inline 生成文件名，默认使用 `target` basename

@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import ipaddress
 import shlex
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 from pydantic import ValidationError
 
 from dros.config_objects import ConfigObject, DevGroupConfig, InterfaceConfig
+from dros.ip_lists import IpListStore, load_ip_lists
 from dros.plugins.base import BootstrapContext, DrosPlugin, UpdateContext
 
 MANAGED_FILES = frozenset(
@@ -22,6 +24,7 @@ MANAGED_FILES = frozenset(
         "/etc/dros/openvpn/*.up",
         "/etc/dros/nftables.d/30-interface-*.nft",
         "/etc/wireguard/*.conf",
+        "/etc/cron.d/dros-wgsd-client-*",
         "/usr/lib/dros/openvpn-iface",
     }
 )
@@ -38,6 +41,7 @@ IFUPDOWN_TYPES = frozenset(
 )
 INTERFACE_TYPE_ORDER = {
     "eth": 0,
+    "ethernet": 0,
     "bridge": 1,
     "vlan": 2,
     "loopback": 3,
@@ -46,7 +50,14 @@ INTERFACE_TYPE_ORDER = {
     "openvpn": 6,
     "pppoe": 7,
     "docker": 8,
+    "external": 9,
 }
+
+
+@dataclass(frozen=True)
+class AuxiliaryChanges:
+    changed: bool = False
+    wireguard_conf_changed: bool = False
 
 
 def create_plugin() -> DrosPlugin:
@@ -76,6 +87,7 @@ def validate(context: UpdateContext, objects: list[ConfigObject]) -> list[str]:
     errors: list[str] = []
     devgroups = _devgroups(context, errors)
     interface_names = {obj.name for obj in context.configs.by_kind("Interface")}
+    xfrm_names = {obj.name for obj in context.configs.by_kind("XfrmTransport")}
     selected_interface_names: set[str] = set()
 
     for obj in objects:
@@ -88,7 +100,7 @@ def validate(context: UpdateContext, objects: list[ConfigObject]) -> list[str]:
         config = _validate_model(context, obj, InterfaceConfig, errors)
         if config is None:
             continue
-        errors.extend(_validate_interface(obj, config, devgroups, interface_names))
+        errors.extend(_validate_interface(obj, config, devgroups, interface_names, xfrm_names))
     if selected_interface_names:
         errors.extend(_validate_interface_dependency_graph(context, selected_interface_names))
     return errors
@@ -103,11 +115,15 @@ def update(context: UpdateContext, objects: list[ConfigObject]) -> None:
         if obj.name not in selected_names:
             continue
         config = context.configs.resolve_object(obj, InterfaceConfig)
-        if config.type == "docker":
+        iface_type = _interface_type(config)
+        if iface_type == "external":
+            apply_runtime_interface_properties(context, obj.name, config, devgroups)
+            continue
+        if iface_type == "docker":
             update_docker_interface(context, obj.name, config, devgroups)
             continue
 
-        aux_changed = _write_auxiliary_files(context, obj, config, devgroups)
+        aux_changes = _write_auxiliary_files(context, obj, config, devgroups)
         nft_changed = _write_interface_nft(context, obj.name, config, devgroups)
         path = _interface_file_path(obj.name, file_order[obj.name])
         _migrate_interface_file(context, obj.name, path)
@@ -115,7 +131,13 @@ def update(context: UpdateContext, objects: list[ConfigObject]) -> None:
             path,
             _render_interface(context, obj.name, config, devgroups),
         )
-        if iface_changed or aux_changed:
+        if (
+            iface_type == "wireguard"
+            and aux_changes.wireguard_conf_changed
+            and not iface_changed
+        ):
+            _wireguard_addconf(context, obj.name)
+        elif iface_changed or aux_changes.changed:
             _reload_ifupdown_interface(context, obj.name, config)
         if nft_changed and _firewall_has_been_applied(context):
             context.executor.run(["nft", "-f", NFTABLES_CONF], real_only=True)
@@ -125,9 +147,10 @@ def handle_event(context: UpdateContext, event: str, iface: str | None = None) -
     devgroups = _devgroups(context, [])
     for obj in sorted(context.configs.by_kind("Interface"), key=_interface_sort_key):
         config = context.configs.resolve_object(obj, InterfaceConfig)
-        if event == "docker-start" and config.type == "docker":
+        iface_type = _interface_type(config)
+        if event == "docker-start" and iface_type == "docker":
             update_docker_interface(context, obj.name, config, devgroups)
-        elif event == "ppp-up" and config.type == "pppoe" and iface == obj.name:
+        elif event == "ppp-up" and iface_type == "pppoe" and iface == obj.name:
             apply_runtime_interface_properties(context, obj.name, config, devgroups)
 
 
@@ -177,21 +200,23 @@ def _validate_interface(
     config: InterfaceConfig,
     devgroups: dict[str, int],
     interface_names: set[str],
+    xfrm_names: set[str],
 ) -> list[str]:
     errors: list[str] = []
     if config.devgroup and config.devgroup not in devgroups:
         errors.append(f"Interface/{obj.name}: references undefined DevGroup/{config.devgroup}")
-    if config.type == "vlan":
+    iface_type = _interface_type(config)
+    if iface_type == "vlan":
         _validate_vlan(obj, config, interface_names, errors)
-    elif config.type == "docker":
+    elif iface_type == "docker":
         _validate_docker(obj, config, errors)
-    elif config.type == "gre":
-        _validate_gre(obj, config, errors)
-    elif config.type == "pppoe":
+    elif iface_type == "gre":
+        _validate_gre(obj, config, xfrm_names, errors)
+    elif iface_type == "pppoe":
         _validate_pppoe(obj, config, errors)
-    elif config.type == "wireguard":
+    elif iface_type == "wireguard":
         _validate_wireguard(obj, config, errors)
-    elif config.type == "openvpn":
+    elif iface_type == "openvpn":
         _validate_openvpn(obj, config, errors)
         _validate_openvpn_listen(obj, config, devgroups, errors)
     return errors
@@ -221,13 +246,22 @@ def _validate_docker(obj: ConfigObject, config: InterfaceConfig, errors: list[st
             errors.append(f"Interface/{obj.name}: spec.subnet is not a valid CIDR: {exc}")
 
 
-def _validate_gre(obj: ConfigObject, config: InterfaceConfig, errors: list[str]) -> None:
+def _validate_gre(
+    obj: ConfigObject,
+    config: InterfaceConfig,
+    xfrm_names: set[str],
+    errors: list[str],
+) -> None:
     if not (config.address or config.local_vip):
         errors.append(f"Interface/{obj.name}: type gre requires spec.address or spec.localVip")
     if not config.local_public_ip:
         errors.append(f"Interface/{obj.name}: type gre requires spec.localPublicIp")
     if not config.remote_public_ip:
         errors.append(f"Interface/{obj.name}: type gre requires spec.remotePublicIp")
+    if config.xfrm_transport and config.xfrm_transport not in xfrm_names:
+        errors.append(
+            f"Interface/{obj.name}: references undefined XfrmTransport/{config.xfrm_transport}"
+        )
     if not 1 <= config.ttl <= 255:
         errors.append(f"Interface/{obj.name}: spec.ttl must be between 1 and 255")
 
@@ -254,6 +288,20 @@ def _validate_wireguard(obj: ConfigObject, config: InterfaceConfig, errors: list
         allowed_ips = _peer_value(peer, "allowedIPs", "allowed_ips")
         if allowed_ips is not None and not isinstance(allowed_ips, list):
             errors.append(f"Interface/{obj.name}: spec.peers[{index}].allowedIPs must be a list")
+    if config.wgsd_client is not None:
+        if len(config.wgsd_client.schedule.split()) != 5:
+            errors.append(
+                f"Interface/{obj.name}: spec.wgsdClient.schedule must be a 5-field cron schedule"
+            )
+        for field_name, value in (
+            ("dns", config.wgsd_client.dns),
+            ("zone", config.wgsd_client.zone),
+            ("schedule", config.wgsd_client.schedule),
+        ):
+            if any(char in str(value) for char in "\r\n"):
+                errors.append(
+                    f"Interface/{obj.name}: spec.wgsdClient.{field_name} must be single-line"
+                )
 
 
 def _validate_openvpn(obj: ConfigObject, config: InterfaceConfig, errors: list[str]) -> None:
@@ -338,7 +386,7 @@ def _interfaces_for_update_order(
 
 def _ifupdown_file_order(ordered_interfaces: list[ConfigObject]) -> dict[str, int]:
     ifupdown_interfaces = [
-        obj for obj in ordered_interfaces if _raw_interface_type(obj) in IFUPDOWN_TYPES
+        obj for obj in ordered_interfaces if _normalized_interface_type(_raw_interface_type(obj)) in IFUPDOWN_TYPES
     ]
     return {obj.name: index for index, obj in enumerate(ifupdown_interfaces)}
 
@@ -395,22 +443,26 @@ def _write_auxiliary_files(
     obj: ConfigObject,
     config: InterfaceConfig,
     devgroups: dict[str, int],
-) -> bool:
+) -> AuxiliaryChanges:
     changed = False
+    wireguard_conf_changed = False
     name = obj.name
-    if config.type == "pppoe":
+    iface_type = _interface_type(config)
+    if iface_type == "pppoe":
         changed = context.executor.write_file(
             f"/etc/ppp/peers/{_safe_name(name)}",
             _render_pppoe_peer(name, config),
             mode=0o600,
         )
-    elif config.type == "wireguard":
-        changed = context.executor.write_file(
+    elif iface_type == "wireguard":
+        wireguard_conf_changed = context.executor.write_file(
             f"/etc/wireguard/{_safe_name(name)}.conf",
-            _render_wireguard_conf(config),
+            _render_wireguard_conf(context, obj, config),
             mode=0o600,
         )
-    elif config.type == "openvpn":
+        changed = wireguard_conf_changed
+        changed = _write_wgsd_cron(context, name, config) or changed
+    elif iface_type == "openvpn":
         changed = context.executor.write_file(
             _openvpn_config_path(name),
             _render_openvpn_config(context, obj, config),
@@ -425,7 +477,9 @@ def _write_auxiliary_files(
                 )
                 or changed
             )
-    return changed
+        else:
+            changed = context.executor.delete_file(_openvpn_up_path(name)) or changed
+    return AuxiliaryChanges(changed=changed, wireguard_conf_changed=wireguard_conf_changed)
 
 
 def _write_interface_nft(
@@ -448,7 +502,8 @@ def _render_interface_nft(
     config: InterfaceConfig,
     devgroups: dict[str, int],
 ) -> str | None:
-    if config.type == "wireguard" and config.listen_port:
+    iface_type = _interface_type(config)
+    if iface_type == "wireguard" and config.listen_port:
         return "\n".join(
             [
                 "# Generated by DROS. Manual changes will be overwritten.",
@@ -461,7 +516,7 @@ def _render_interface_nft(
             ]
         )
 
-    if config.type == "openvpn":
+    if iface_type == "openvpn":
         listen_items = _openvpn_listen_items(config.listen)
         if not listen_items:
             return None
@@ -506,53 +561,77 @@ def _render_interface(
 ) -> str:
     lines = [
         "# Generated by DROS. Manual changes will be overwritten.",
-        f"auto {name}",
-        *_interface_body(context, name, config),
     ]
-    if config.devgroup and config.type not in {"pppoe", "openvpn"}:
+    if config.auto:
+        lines.append(f"auto {name}")
+    elif config.allow_hotplug:
+        lines.append(f"allow-hotplug {name}")
+    lines.extend(_interface_body(context, name, config))
+    if config.devgroup and _interface_type(config) not in {"pppoe", "openvpn"}:
         lines.append(f"  post-up ip link set dev {name} group {devgroups[config.devgroup]}")
     lines.append("")
     return "\n".join(lines)
 
 
 def _interface_body(context: UpdateContext, name: str, config: InterfaceConfig) -> list[str]:
-    if config.type == "loopback":
+    iface_type = _interface_type(config)
+    if iface_type == "loopback":
         return _render_loopback(name, config)
-    if config.type == "gre":
+    if iface_type == "gre":
         return _render_gre(name, config)
-    if config.type == "pppoe":
-        return _render_pppoe_iface(name, config)
-    if config.type == "wireguard":
+    if iface_type == "pppoe":
+        return _render_pppoe_iface(context, name, config)
+    if iface_type == "wireguard":
         return _render_wireguard_iface(name, config)
-    if config.type == "openvpn":
+    if iface_type == "openvpn":
         return _render_openvpn_iface(context, name, config)
 
     lines = _address_family(name, config)
-    if config.type == "bridge":
+    if iface_type == "bridge":
         _append_bridge(lines, config)
-    elif config.type == "vlan":
-        _append_vlan(lines, config)
+    elif iface_type == "vlan":
+        _append_vlan(context, lines, config)
     return lines
 
 
 def _address_family(name: str, config: InterfaceConfig) -> list[str]:
+    address, extra_addresses = _address_fields(config)
     if config.dhcp:
         lines = [f"iface {name} inet dhcp"]
-    elif config.address:
-        lines = [f"iface {name} inet static", f"  address {config.address}"]
+        _append_gateway_route(lines, name, config)
+        _append_extra_addresses(lines, extra_addresses)
+        return lines
+    elif address:
+        lines = [f"iface {name} inet static", f"  address {address}"]
     else:
         lines = [f"iface {name} inet manual"]
+        _append_gateway_route(lines, name, config)
+        _append_extra_addresses(lines, extra_addresses)
+        return lines
 
     if config.gateway:
         lines.append(f"  gateway {config.gateway}")
-    _append_extra_addresses(lines, config.extra_addresses)
+    _append_extra_addresses(lines, extra_addresses)
     return lines
+
+
+def _address_fields(config: InterfaceConfig) -> tuple[str | None, list[str]]:
+    if config.addresses:
+        return config.addresses[0], [*config.addresses[1:], *config.extra_addresses]
+    return config.address, list(config.extra_addresses)
 
 
 def _append_extra_addresses(lines: list[str], addresses: list[str]) -> None:
     for address in addresses:
         lines.append(f"  up ip addr add {address} dev $IFACE")
         lines.append(f"  down ip addr del {address} dev $IFACE || true")
+
+
+def _append_gateway_route(lines: list[str], name: str, config: InterfaceConfig) -> None:
+    if not config.gateway:
+        return
+    lines.append(f"  post-up ip route replace default via {config.gateway} dev {name}")
+    lines.append(f"  pre-down ip route del default via {config.gateway} dev {name} || true")
 
 
 def _render_loopback(name: str, config: InterfaceConfig) -> list[str]:
@@ -564,14 +643,17 @@ def _render_loopback(name: str, config: InterfaceConfig) -> list[str]:
 def _append_bridge(lines: list[str], config: InterfaceConfig) -> None:
     ports = " ".join(config.ports) if config.ports else "none"
     lines.append(f"  bridge_ports {ports}")
-    lines.append("  bridge_fd 0")
+    lines.append(f"  bridge_stp {_on_off(config.stp)}")
+    lines.append(f"  bridge_fd {config.forward_delay}")
     if config.vlan_aware:
         lines.append("  bridge_vlan_aware yes")
 
 
-def _append_vlan(lines: list[str], config: InterfaceConfig) -> None:
+def _append_vlan(context: UpdateContext, lines: list[str], config: InterfaceConfig) -> None:
     parent = shlex.quote(str(config.parent))
     vlan_id = int(config.id or 0)
+    if config.parent and _should_ifup_dependency(context, config.parent):
+        lines.append(f"  pre-up ifup {parent} 2>/dev/null || true")
     lines.append(
         f"  pre-up ip link show dev {parent} >/dev/null 2>&1 || "
         f"{{ echo 'dros: vlan parent {parent} for $IFACE is missing' >&2; exit 1; }}"
@@ -608,13 +690,13 @@ def _render_gre(name: str, config: InterfaceConfig) -> list[str]:
     return lines
 
 
-def _render_pppoe_iface(name: str, config: InterfaceConfig) -> list[str]:
+def _render_pppoe_iface(context: UpdateContext, name: str, config: InterfaceConfig) -> list[str]:
     device = shlex.quote(str(config.device))
     lines = [f"iface {name} inet ppp"]
     if config.manage_device:
+        lines.append(f"  pre-up ifup {device} 2>/dev/null || true")
         lines.extend(
             [
-                f"  pre-up ifup {device} 2>/dev/null || true",
                 f"  pre-up ip link show dev {device} >/dev/null 2>&1 || "
                 f"{{ echo 'dros: pppoe device {device} for $IFACE is missing' >&2; exit 1; }}",
                 f"  pre-up ip link set dev {device} up",
@@ -639,8 +721,18 @@ def _render_pppoe_peer(name: str, config: InterfaceConfig) -> str:
     _append_ppp_bool(lines, config.debug, "debug")
     lines.append(f"holdoff {config.holdoff}")
     _append_ppp_bool(lines, config.noipdefault, "noipdefault")
-    _append_ppp_bool(lines, config.defaultroute, "defaultroute")
-    _append_ppp_bool(lines, config.replacedefaultroute, "replacedefaultroute")
+    if config.nodefaultroute:
+        lines.append("nodefaultroute")
+    elif config.defaultroute:
+        lines.append("defaultroute")
+        if config.replacedefaultroute and not config.noreplacedefaultroute:
+            lines.append("replacedefaultroute")
+    elif config.noreplacedefaultroute:
+        lines.append("noreplacedefaultroute")
+    if config.nodefaultroute6:
+        lines.append("nodefaultroute6")
+    elif config.defaultroute6:
+        lines.append("defaultroute6")
     _append_ppp_bool(lines, config.noproxyarp, "noproxyarp")
     ipv6_options: list[str] = []
     if config.ipv6:
@@ -679,7 +771,59 @@ def _render_wireguard_iface(name: str, config: InterfaceConfig) -> list[str]:
     return lines
 
 
-def _render_wireguard_conf(config: InterfaceConfig) -> str:
+def _wireguard_addconf(context: UpdateContext, name: str) -> None:
+    safe_name = _safe_name(name)
+    quoted_name = shlex.quote(name)
+    quoted_config = shlex.quote(f"/etc/wireguard/{safe_name}.conf")
+    context.executor.run(
+        [
+            "sh",
+            "-c",
+            (
+                f"if ip link show dev {quoted_name} >/dev/null 2>&1; then "
+                f"wg addconf {quoted_name} {quoted_config}; "
+                f"else ifup {quoted_name}; fi"
+            ),
+        ],
+        real_only=True,
+    )
+
+
+def _write_wgsd_cron(context: UpdateContext, name: str, config: InterfaceConfig) -> bool:
+    path = f"/etc/cron.d/dros-wgsd-client-{_safe_name(name)}"
+    if config.wgsd_client is None:
+        return context.executor.delete_file(path)
+    lines = [
+        "# Generated by DROS. Manual changes will be overwritten.",
+        f"# Resource: Interface/{name} wgsdClient",
+    ]
+    command = " ".join(
+        [
+            "/usr/local/bin/wgsd-client",
+            "-device",
+            shlex.quote(name),
+            "-dns",
+            shlex.quote(config.wgsd_client.dns),
+            "-zone",
+            shlex.quote(config.wgsd_client.zone),
+        ]
+    )
+    entry = f"{config.wgsd_client.schedule} root {command}"
+    if config.wgsd_client.enabled:
+        lines.append(entry)
+    else:
+        lines.append("# disabled")
+        lines.append(f"# {entry}")
+    lines.append("")
+    return context.executor.write_file(path, "\n".join(lines))
+
+
+def _render_wireguard_conf(
+    context: UpdateContext,
+    obj: ConfigObject,
+    config: InterfaceConfig,
+) -> str:
+    ip_lists = load_ip_lists(context.settings)
     lines = ["# Generated by DROS. Manual changes will be overwritten.", "[Interface]"]
     if config.private_key:
         lines.append(f"PrivateKey = {config.private_key}")
@@ -690,7 +834,11 @@ def _render_wireguard_conf(config: InterfaceConfig) -> str:
         lines.append(f"PublicKey = {_peer_value(peer, 'publicKey', 'public_key')}")
         allowed_ips = _peer_value(peer, "allowedIPs", "allowed_ips")
         if allowed_ips:
-            lines.append(f"AllowedIPs = {', '.join(str(item) for item in allowed_ips)}")
+            expanded, warnings = _expand_wireguard_allowed_ips(allowed_ips, ip_lists)
+            for warning in warnings:
+                _warn(context, f"Interface/{obj.name}: {warning}")
+            if expanded:
+                lines.append(f"AllowedIPs = {', '.join(expanded)}")
         endpoint = _peer_value(peer, "endpoint")
         if endpoint:
             lines.append(f"Endpoint = {endpoint}")
@@ -699,6 +847,58 @@ def _render_wireguard_conf(config: InterfaceConfig) -> str:
             lines.append(f"PersistentKeepalive = {keepalive}")
     lines.append("")
     return "\n".join(lines)
+
+
+def _expand_wireguard_allowed_ips(
+    values: list[object],
+    ip_lists: IpListStore,
+) -> tuple[list[str], list[str]]:
+    allowed_ips: list[str] = []
+    warnings: list[str] = []
+    seen: set[str] = set()
+    for raw_value in values:
+        value = str(raw_value)
+        try:
+            network = ipaddress.ip_network(value, strict=False)
+        except ValueError:
+            networks, list_warnings = _wireguard_ip_list_networks(value, ip_lists)
+            warnings.extend(list_warnings)
+        else:
+            networks = [str(network)]
+        for network in networks:
+            if network in seen:
+                continue
+            seen.add(network)
+            allowed_ips.append(network)
+    return allowed_ips, warnings
+
+
+def _wireguard_ip_list_networks(
+    reference: str,
+    ip_lists: IpListStore,
+) -> tuple[list[str], list[str]]:
+    if "@" in reference:
+        name, suffix = reference.rsplit("@", 1)
+        if suffix == "v4":
+            return ip_lists.resolve(name, "ipv4")
+        if suffix == "v6":
+            return ip_lists.resolve(name, "ipv6")
+        if suffix == "all":
+            return _resolve_wireguard_all_ip_list(name, ip_lists)
+        return [], [f"allowedIPs ip list reference {reference!r} has unsupported suffix @{suffix}"]
+    return _resolve_wireguard_all_ip_list(reference, ip_lists)
+
+
+def _resolve_wireguard_all_ip_list(
+    name: str,
+    ip_lists: IpListStore,
+) -> tuple[list[str], list[str]]:
+    v4, v4_warnings = ip_lists.resolve(name, "ipv4")
+    v6, v6_warnings = ip_lists.resolve(name, "ipv6")
+    if v4_warnings and v6_warnings:
+        return [], [f"ip list {name!r} not found"]
+    warnings = [warning for warning in [*v4_warnings, *v6_warnings] if "not found" not in warning]
+    return [*v4, *v6], warnings
 
 
 def _render_openvpn_iface(
@@ -843,10 +1043,11 @@ def _reload_ifupdown_interface(
     name: str,
     config: InterfaceConfig,
 ) -> None:
-    if config.type == "loopback":
+    iface_type = _interface_type(config)
+    if iface_type == "loopback":
         context.executor.run(["ifup", name], check=False, real_only=True)
         return
-    if config.type == "pppoe":
+    if iface_type == "pppoe":
         context.executor.run(["ifdown", "--force", name], check=False, real_only=True, timeout=60)
         context.executor.run(["ifup", name], real_only=True, timeout=120)
         return
@@ -1120,7 +1321,7 @@ def _sort_interface_objects(
 
 def _interface_dependencies(obj: ConfigObject, interface_names: set[str]) -> list[str]:
     dependencies: list[str] = []
-    iface_type = _raw_interface_type(obj)
+    iface_type = _normalized_interface_type(_raw_interface_type(obj))
     if iface_type == "vlan":
         _append_dependency(dependencies, obj.spec.get("parent"), interface_names)
     elif iface_type == "bridge":
@@ -1143,12 +1344,37 @@ def _append_dependency(
 
 
 def _interface_sort_key(obj: ConfigObject) -> tuple[int, str]:
-    return (INTERFACE_TYPE_ORDER.get(_raw_interface_type(obj), 50), obj.name)
+    return (INTERFACE_TYPE_ORDER.get(_normalized_interface_type(_raw_interface_type(obj)), 50), obj.name)
 
 
 def _raw_interface_type(obj: ConfigObject) -> str:
     value = obj.spec.get("type", "")
     return value if isinstance(value, str) else ""
+
+
+def _interface_type(config: InterfaceConfig) -> str:
+    return _normalized_interface_type(config.type)
+
+
+def _normalized_interface_type(value: str) -> str:
+    return "eth" if value == "ethernet" else value
+
+
+def _should_ifup_dependency(context: UpdateContext, name: str) -> bool:
+    obj = context.configs.get("Interface", name)
+    if obj is None:
+        return False
+    iface_type = _normalized_interface_type(_raw_interface_type(obj))
+    return iface_type not in {"external", "docker"}
+
+
+def _on_off(value: bool) -> str:
+    return "on" if value else "off"
+
+
+def _warn(context: UpdateContext, message: str) -> None:
+    if context.executor.verbose >= 1:
+        context.executor.console.print(f"warning: {message}", markup=False)
 
 
 def _safe_name(name: str) -> str:

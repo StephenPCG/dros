@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from dros.config_objects import (
+    ConfigObjectLoadError,
     DevGroupConfig,
     InterfaceConfig,
     SystemMirrorConfig,
@@ -163,3 +164,46 @@ spec:
     assert interface.devgroup == "lan"
     assert interface.extra_addresses == ["10.0.0.2/24"]
     assert interface.vlan_aware is True
+
+
+def test_config_loader_normalizes_kind_aliases_from_yaml(tmp_path: Path) -> None:
+    configs = tmp_path / "configs"
+    configs.mkdir()
+    (configs / "iface.yaml").write_text(
+        """
+apiVersion: dros/v1alpha1
+kind: iface
+metadata:
+  name: eth0
+spec:
+  type: eth
+""".lstrip(),
+        encoding="utf-8",
+    )
+
+    store = load_config_objects(DrosSettings(paths=DrosPaths(configs=configs)))
+
+    assert store.require("Interface", "eth0").kind == "Interface"
+
+
+def test_config_loader_rejects_unsupported_api_version(tmp_path: Path) -> None:
+    configs = tmp_path / "configs"
+    configs.mkdir()
+    (configs / "network.yaml").write_text(
+        """
+apiVersion: example/v1
+kind: Interface
+metadata:
+  name: eth0
+spec:
+  type: eth
+""".lstrip(),
+        encoding="utf-8",
+    )
+
+    try:
+        load_config_objects(DrosSettings(paths=DrosPaths(configs=configs)))
+    except ConfigObjectLoadError as exc:
+        assert "unsupported apiVersion" in str(exc)
+    else:
+        raise AssertionError("unsupported apiVersion should be rejected")
