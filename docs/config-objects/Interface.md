@@ -468,9 +468,9 @@ docker network create --driver bridge --subnet <subnet> --opt com.docker.network
 - `noipdefault`，默认 `true`，写入 `noipdefault`
 - `defaultroute`，默认 `true`，写入 `defaultroute`
 - `defaultroute6`，默认 `true`，写入 `defaultroute6`
-- `nodefaultroute`，默认 `false`，为 `true` 时优先写入 `nodefaultroute`
-- `nodefaultroute6`，默认 `false`，为 `true` 时优先写入 `nodefaultroute6`
-- `noreplacedefaultroute`，默认 `false`
+- `nodefaultroute`，默认 `true`，为 `true` 时优先写入 `nodefaultroute`
+- `nodefaultroute6`，默认 `true`，为 `true` 时优先写入 `nodefaultroute6`
+- `noreplacedefaultroute`，默认 `true`，写入 `noreplacedefaultroute`
 - `replacedefaultroute`，默认 `false`，写入 `replacedefaultroute`
 - `noproxyarp`，默认 `true`，写入 `noproxyarp`
 - `ipv6`，默认 `true`，写入 `+ipv6`

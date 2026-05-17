@@ -702,9 +702,9 @@ class InterfaceConfig(BaseModel):
     noipdefault: bool = True
     defaultroute: bool = True
     defaultroute6: bool = True
-    nodefaultroute: bool = False
-    nodefaultroute6: bool = False
-    noreplacedefaultroute: bool = False
+    nodefaultroute: bool = True
+    nodefaultroute6: bool = True
+    noreplacedefaultroute: bool = True
     replacedefaultroute: bool = False
     noproxyarp: bool = True
     ipv6: bool = True

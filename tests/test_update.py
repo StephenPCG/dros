@@ -805,7 +805,38 @@ spec:
     assert "defaultroute" not in lines
     assert "nodefaultroute6" in lines
     assert "defaultroute6" not in lines
-    assert "noreplacedefaultroute" not in lines
+    assert "noreplacedefaultroute" in lines
+
+
+def test_update_pppoe_defaults_disable_default_routes(tmp_path: Path) -> None:
+    settings = _settings(tmp_path)
+    settings.paths.configs.mkdir(parents=True)
+    (settings.paths.configs / "pppoe.yaml").write_text(
+        """
+apiVersion: dros/v1alpha1
+kind: Interface
+metadata:
+  name: pppoe-wan
+spec:
+  type: pppoe
+  device: eth0
+  user: home@example.net
+  password: secret
+""".lstrip(),
+        encoding="utf-8",
+    )
+
+    run_update(settings, target="iface/pppoe-wan", console=_console(StringIO()))
+
+    peer = (settings.sys_root / "etc/ppp/peers/pppoe-wan").read_text(encoding="utf-8")
+    lines = set(peer.splitlines())
+    assert "noipdefault" in lines
+    assert "nodefaultroute" in lines
+    assert "noreplacedefaultroute" in lines
+    assert "nodefaultroute6" in lines
+    assert "defaultroute" not in lines
+    assert "defaultroute6" not in lines
+    assert "replacedefaultroute" not in lines
 
 
 def test_update_xfrm_transport_renders_transport_mode_commands(tmp_path: Path) -> None:

@@ -727,7 +727,7 @@ def _render_pppoe_peer(name: str, config: InterfaceConfig) -> str:
         lines.append("defaultroute")
         if config.replacedefaultroute and not config.noreplacedefaultroute:
             lines.append("replacedefaultroute")
-    elif config.noreplacedefaultroute:
+    if config.noreplacedefaultroute:
         lines.append("noreplacedefaultroute")
     if config.nodefaultroute6:
         lines.append("nodefaultroute6")
