@@ -30,6 +30,7 @@ type AuthState =
   | { status: "authenticated"; username: string }
 
 type PageId = "monitor" | "tools" | "openvpn"
+type MonitorViewId = "overview" | "bandwidth" | "ping"
 type Theme = "light" | "dark"
 type OpenVPNProfileKind = "server" | "client"
 
@@ -89,6 +90,52 @@ type MonitorSummary = {
     rxBytesPerSecond: number
     txBytesPerSecond: number
   }>
+}
+
+type MonitorTimespan = {
+  id: string
+  label: string
+  seconds: number
+}
+
+type MonitorRrdTargets = {
+  timespans: MonitorTimespan[]
+  bandwidth: Array<{
+    name: string
+    hasData: boolean
+  }>
+  ping: Array<{
+    name: string
+    hasLatency: boolean
+    hasLoss: boolean
+  }>
+}
+
+type BandwidthPoint = {
+  timestamp: number
+  rxBitsPerSecond: number | null
+  txBitsPerSecond: number | null
+}
+
+type BandwidthSeries = {
+  target: string
+  timespan: string
+  unit: string
+  points: BandwidthPoint[]
+}
+
+type PingPoint = {
+  timestamp: number
+  latencyMs: number | null
+  lossPercent: number | null
+}
+
+type PingSeries = {
+  target: string
+  timespan: string
+  latencyUnit: string
+  lossUnit: string
+  points: PingPoint[]
 }
 
 const pages: Array<{
@@ -457,6 +504,73 @@ function MobileNavigationDrawer({
 }
 
 function MonitorPage() {
+  const [view, setView] = useState<MonitorViewId>(() => monitorViewFromPath(window.location.pathname))
+
+  useEffect(() => {
+    function handlePopState() {
+      setView(monitorViewFromPath(window.location.pathname))
+    }
+    window.addEventListener("popstate", handlePopState)
+    return () => window.removeEventListener("popstate", handlePopState)
+  }, [])
+
+  function handleViewChange(next: MonitorViewId) {
+    setView(next)
+    const path = monitorViewPath(next)
+    if (window.location.pathname !== path) {
+      window.history.pushState({ page: "monitor", view: next }, "", path)
+    }
+  }
+
+  return (
+    <div className="min-h-[calc(100svh-11rem)] space-y-5">
+      <MonitorSubNavigation view={view} onChange={handleViewChange} />
+      {view === "bandwidth" ? (
+        <MonitorBandwidthPage />
+      ) : view === "ping" ? (
+        <MonitorPingPage />
+      ) : (
+        <MonitorOverviewPage />
+      )}
+    </div>
+  )
+}
+
+function MonitorSubNavigation({
+  view,
+  onChange,
+}: {
+  view: MonitorViewId
+  onChange: (view: MonitorViewId) => void
+}) {
+  const items: Array<{ id: MonitorViewId; label: string }> = [
+    { id: "overview", label: "概览" },
+    { id: "bandwidth", label: "带宽" },
+    { id: "ping", label: "Ping" },
+  ]
+  return (
+    <div className="flex max-w-full gap-1 overflow-x-auto rounded-md border bg-muted p-1">
+      {items.map((item) => (
+        <button
+          key={item.id}
+          className={cn(
+            "h-9 min-w-fit rounded-sm px-3 text-sm font-medium transition-colors",
+            view === item.id
+              ? "bg-background text-foreground shadow-sm"
+              : "text-muted-foreground hover:text-foreground",
+          )}
+          type="button"
+          onClick={() => onChange(item.id)}
+          aria-current={view === item.id ? "page" : undefined}
+        >
+          {item.label}
+        </button>
+      ))}
+    </div>
+  )
+}
+
+function MonitorOverviewPage() {
   const [summary, setSummary] = useState<MonitorSummary | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState("")
@@ -480,7 +594,7 @@ function MonitorPage() {
   }
 
   return (
-    <div className="min-h-[calc(100svh-11rem)] space-y-5">
+    <div className="space-y-5">
       <div className="flex items-center justify-between gap-3">
         <div className="text-sm text-muted-foreground">
           {summary ? `${summary.system.hostname} · ${summary.system.kernel}` : "monitor"}
@@ -545,6 +659,578 @@ function MonitorPage() {
             {loading ? "正在加载" : "暂无接口数据"}
           </div>
         )}
+      </div>
+    </div>
+  )
+}
+
+function MonitorBandwidthPage() {
+  const [targets, setTargets] = useState<MonitorRrdTargets | null>(null)
+  const [selectedTargets, setSelectedTargets] = useState<string[]>([])
+  const [selectedTimespans, setSelectedTimespans] = useState<string[]>([])
+  const [series, setSeries] = useState<Record<string, BandwidthSeries>>({})
+  const [loading, setLoading] = useState(true)
+  const [loadingSeries, setLoadingSeries] = useState(false)
+  const [error, setError] = useState("")
+
+  useEffect(() => {
+    let cancelled = false
+    async function loadTargets() {
+      setLoading(true)
+      setError("")
+      try {
+        const data = await apiJson<MonitorRrdTargets>("/api/monitor/rrd/targets")
+        if (cancelled) {
+          return
+        }
+        setTargets(data)
+        setSelectedTargets((current) => keepSelected(current, data.bandwidth.map((item) => item.name), 1))
+        setSelectedTimespans((current) => keepSelected(current, data.timespans.map((item) => item.id), 1))
+      } catch (err) {
+        if (!cancelled) {
+          setError(errorMessage(err, "加载带宽目标失败"))
+        }
+      } finally {
+        if (!cancelled) {
+          setLoading(false)
+        }
+      }
+    }
+    loadTargets()
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  useEffect(() => {
+    if (!targets || selectedTargets.length === 0 || selectedTimespans.length === 0) {
+      setSeries({})
+      return
+    }
+    let cancelled = false
+    async function loadSeries() {
+      setLoadingSeries(true)
+      setError("")
+      try {
+        const pairs = selectedTargets.flatMap((target) =>
+          selectedTimespans.map((timespan) => ({ target, timespan })),
+        )
+        const values = await Promise.all(
+          pairs.map(async (pair) => {
+            const params = new URLSearchParams({ target: pair.target, timespan: pair.timespan })
+            const data = await apiJson<BandwidthSeries>(`/api/monitor/rrd/bandwidth?${params}`)
+            return [matrixKey(pair.target, pair.timespan), data] as const
+          }),
+        )
+        if (!cancelled) {
+          setSeries(Object.fromEntries(values))
+        }
+      } catch (err) {
+        if (!cancelled) {
+          setError(errorMessage(err, "加载带宽图数据失败"))
+        }
+      } finally {
+        if (!cancelled) {
+          setLoadingSeries(false)
+        }
+      }
+    }
+    loadSeries()
+    return () => {
+      cancelled = true
+    }
+  }, [targets, selectedTargets, selectedTimespans])
+
+  const bandwidthTargets = targets?.bandwidth ?? []
+  const timespans = targets?.timespans ?? []
+  return (
+    <MonitorGraphSection
+      title="带宽"
+      loading={loading}
+      loadingSeries={loadingSeries}
+      error={error}
+      empty={bandwidthTargets.length === 0}
+      emptyText="暂无 collectd interface RRD 数据"
+      targetLabel="接口"
+      targets={bandwidthTargets.map((item) => item.name)}
+      timespans={timespans}
+      selectedTargets={selectedTargets}
+      selectedTimespans={selectedTimespans}
+      onTargetsChange={setSelectedTargets}
+      onTimespansChange={setSelectedTimespans}
+      renderChart={(target, timespan) => (
+        <BandwidthChart series={series[matrixKey(target, timespan)]} />
+      )}
+    />
+  )
+}
+
+function MonitorPingPage() {
+  const [targets, setTargets] = useState<MonitorRrdTargets | null>(null)
+  const [selectedTargets, setSelectedTargets] = useState<string[]>([])
+  const [selectedTimespans, setSelectedTimespans] = useState<string[]>([])
+  const [series, setSeries] = useState<Record<string, PingSeries>>({})
+  const [loading, setLoading] = useState(true)
+  const [loadingSeries, setLoadingSeries] = useState(false)
+  const [error, setError] = useState("")
+
+  useEffect(() => {
+    let cancelled = false
+    async function loadTargets() {
+      setLoading(true)
+      setError("")
+      try {
+        const data = await apiJson<MonitorRrdTargets>("/api/monitor/rrd/targets")
+        if (cancelled) {
+          return
+        }
+        setTargets(data)
+        setSelectedTargets((current) => keepSelected(current, data.ping.map((item) => item.name), 1))
+        setSelectedTimespans((current) => keepSelected(current, data.timespans.map((item) => item.id), 1))
+      } catch (err) {
+        if (!cancelled) {
+          setError(errorMessage(err, "加载 Ping 目标失败"))
+        }
+      } finally {
+        if (!cancelled) {
+          setLoading(false)
+        }
+      }
+    }
+    loadTargets()
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  useEffect(() => {
+    if (!targets || selectedTargets.length === 0 || selectedTimespans.length === 0) {
+      setSeries({})
+      return
+    }
+    let cancelled = false
+    async function loadSeries() {
+      setLoadingSeries(true)
+      setError("")
+      try {
+        const pairs = selectedTargets.flatMap((target) =>
+          selectedTimespans.map((timespan) => ({ target, timespan })),
+        )
+        const values = await Promise.all(
+          pairs.map(async (pair) => {
+            const params = new URLSearchParams({ target: pair.target, timespan: pair.timespan })
+            const data = await apiJson<PingSeries>(`/api/monitor/rrd/ping?${params}`)
+            return [matrixKey(pair.target, pair.timespan), data] as const
+          }),
+        )
+        if (!cancelled) {
+          setSeries(Object.fromEntries(values))
+        }
+      } catch (err) {
+        if (!cancelled) {
+          setError(errorMessage(err, "加载 Ping 图数据失败"))
+        }
+      } finally {
+        if (!cancelled) {
+          setLoadingSeries(false)
+        }
+      }
+    }
+    loadSeries()
+    return () => {
+      cancelled = true
+    }
+  }, [targets, selectedTargets, selectedTimespans])
+
+  const pingTargets = targets?.ping ?? []
+  const timespans = targets?.timespans ?? []
+  return (
+    <MonitorGraphSection
+      title="Ping"
+      loading={loading}
+      loadingSeries={loadingSeries}
+      error={error}
+      empty={pingTargets.length === 0}
+      emptyText="暂无 collectd ping RRD 数据"
+      targetLabel="目标"
+      targets={pingTargets.map((item) => item.name)}
+      timespans={timespans}
+      selectedTargets={selectedTargets}
+      selectedTimespans={selectedTimespans}
+      onTargetsChange={setSelectedTargets}
+      onTimespansChange={setSelectedTimespans}
+      renderChart={(target, timespan) => <PingChart series={series[matrixKey(target, timespan)]} />}
+    />
+  )
+}
+
+function MonitorGraphSection({
+  title,
+  loading,
+  loadingSeries,
+  error,
+  empty,
+  emptyText,
+  targetLabel,
+  targets,
+  timespans,
+  selectedTargets,
+  selectedTimespans,
+  onTargetsChange,
+  onTimespansChange,
+  renderChart,
+}: {
+  title: string
+  loading: boolean
+  loadingSeries: boolean
+  error: string
+  empty: boolean
+  emptyText: string
+  targetLabel: string
+  targets: string[]
+  timespans: MonitorTimespan[]
+  selectedTargets: string[]
+  selectedTimespans: string[]
+  onTargetsChange: (value: string[]) => void
+  onTimespansChange: (value: string[]) => void
+  renderChart: (target: string, timespan: string) => ReactNode
+}) {
+  if (loading) {
+    return (
+      <div className="grid h-40 place-items-center rounded-md border text-muted-foreground">
+        <Loader2 className="size-5 animate-spin" aria-label="Loading" />
+      </div>
+    )
+  }
+  return (
+    <div className="space-y-4">
+      <div className="flex flex-col gap-3 rounded-md border bg-background p-3">
+        <div className="flex items-center justify-between gap-3">
+          <div className="text-sm font-medium">{title}</div>
+          {loadingSeries ? <Loader2 className="size-4 animate-spin text-muted-foreground" /> : null}
+        </div>
+        <MultiSelectChips
+          label={targetLabel}
+          options={targets}
+          selected={selectedTargets}
+          onChange={onTargetsChange}
+        />
+        <MultiSelectChips
+          label="时间段"
+          options={timespans.map((item) => item.id)}
+          optionLabels={Object.fromEntries(timespans.map((item) => [item.id, item.label]))}
+          selected={selectedTimespans}
+          onChange={onTimespansChange}
+        />
+      </div>
+      {error ? (
+        <div className="rounded-md border border-destructive/35 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+          {error}
+        </div>
+      ) : null}
+      {empty ? (
+        <div className="rounded-md border border-dashed px-3 py-10 text-sm text-muted-foreground">
+          {emptyText}
+        </div>
+      ) : selectedTargets.length === 0 || selectedTimespans.length === 0 ? (
+        <div className="rounded-md border border-dashed px-3 py-10 text-sm text-muted-foreground">
+          请选择至少一个{targetLabel}和时间段
+        </div>
+      ) : (
+        <div className="max-w-full overflow-x-auto rounded-md border bg-background">
+          <div
+            className="grid min-w-max"
+            style={{
+              gridTemplateColumns: `10rem repeat(${selectedTimespans.length}, minmax(20rem, 1fr))`,
+            }}
+          >
+            <div className="sticky left-0 z-20 border-b border-r bg-muted/80 px-3 py-2 text-xs font-medium text-muted-foreground">
+              {targetLabel}
+            </div>
+            {selectedTimespans.map((timespan) => (
+              <div
+                key={timespan}
+                className="border-b border-r bg-muted/50 px-3 py-2 text-xs font-medium text-muted-foreground last:border-r-0"
+              >
+                {timespans.find((item) => item.id === timespan)?.label ?? timespan}
+              </div>
+            ))}
+            {selectedTargets.map((target) => (
+              <div key={target} className="contents">
+                <div className="sticky left-0 z-10 border-r border-t bg-background px-3 py-4 font-mono text-xs">
+                  <div className="truncate">{target}</div>
+                </div>
+                {selectedTimespans.map((timespan) => (
+                  <div key={`${target}:${timespan}`} className="border-r border-t p-3 last:border-r-0">
+                    {renderChart(target, timespan)}
+                  </div>
+                ))}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+function MultiSelectChips({
+  label,
+  options,
+  optionLabels,
+  selected,
+  onChange,
+}: {
+  label: string
+  options: string[]
+  optionLabels?: Record<string, string>
+  selected: string[]
+  onChange: (value: string[]) => void
+}) {
+  return (
+    <div className="space-y-2">
+      <div className="text-xs font-medium text-muted-foreground">{label}</div>
+      <div className="flex flex-wrap gap-2">
+        {options.length === 0 ? (
+          <span className="text-sm text-muted-foreground">暂无可选项</span>
+        ) : (
+          options.map((option) => {
+            const checked = selected.includes(option)
+            return (
+              <label
+                key={option}
+                className={cn(
+                  "inline-flex h-8 cursor-pointer items-center gap-2 rounded-md border px-2 text-sm transition-colors",
+                  checked ? "border-ring bg-muted text-foreground" : "text-muted-foreground hover:text-foreground",
+                )}
+              >
+                <input
+                  className="size-3.5 accent-primary"
+                  type="checkbox"
+                  checked={checked}
+                  onChange={() => onChange(toggleSelection(selected, option))}
+                />
+                <span>{optionLabels?.[option] ?? option}</span>
+              </label>
+            )
+          })
+        )}
+      </div>
+    </div>
+  )
+}
+
+function BandwidthChart({ series }: { series?: BandwidthSeries }) {
+  const points = series?.points ?? []
+  const max = maxValue(points, [(point) => point.rxBitsPerSecond, (point) => point.txBitsPerSecond])
+  return (
+    <LineChartPanel
+      emptyText="暂无带宽数据"
+      points={points}
+      leftLabel="bit/s"
+      rightLabel=""
+      maxLeft={max}
+      maxRight={null}
+      series={[
+        {
+          label: "RX",
+          color: "#2563eb",
+          value: (point) => point.rxBitsPerSecond,
+          format: formatBitRate,
+        },
+        {
+          label: "TX",
+          color: "#dc2626",
+          value: (point) => point.txBitsPerSecond,
+          format: formatBitRate,
+        },
+      ]}
+    />
+  )
+}
+
+function PingChart({ series }: { series?: PingSeries }) {
+  const points = series?.points ?? []
+  const latencyMax = maxValue(points, [(point) => point.latencyMs])
+  const lossMax = Math.max(100, maxValue(points, [(point) => point.lossPercent]))
+  return (
+    <LineChartPanel
+      emptyText="暂无 Ping 数据"
+      points={points}
+      leftLabel="延迟 ms"
+      rightLabel="丢包率 %"
+      maxLeft={latencyMax}
+      maxRight={lossMax}
+      series={[
+        {
+          label: "延迟",
+          color: "#2563eb",
+          value: (point) => point.latencyMs,
+          axis: "left",
+          format: (value) => `${value.toFixed(1)} ms`,
+        },
+        {
+          label: "丢包",
+          color: "#dc2626",
+          value: (point) => point.lossPercent,
+          axis: "right",
+          format: (value) => `${value.toFixed(1)}%`,
+        },
+      ]}
+    />
+  )
+}
+
+function LineChartPanel<Point extends { timestamp: number }>({
+  points,
+  series,
+  emptyText,
+  leftLabel,
+  rightLabel,
+  maxLeft,
+  maxRight,
+}: {
+  points: Point[]
+  series: Array<{
+    label: string
+    color: string
+    value: (point: Point) => number | null
+    axis?: "left" | "right"
+    format: (value: number) => string
+  }>
+  emptyText: string
+  leftLabel: string
+  rightLabel: string
+  maxLeft: number
+  maxRight: number | null
+}) {
+  if (points.length === 0) {
+    return <div className="grid h-48 place-items-center text-sm text-muted-foreground">{emptyText}</div>
+  }
+  const width = 480
+  const height = 230
+  const padding = { top: 18, right: rightLabel ? 54 : 20, bottom: 34, left: 54 }
+  const minTimestamp = Math.min(...points.map((point) => point.timestamp))
+  const maxTimestamp = Math.max(...points.map((point) => point.timestamp))
+  const safeMaxLeft = maxLeft > 0 ? maxLeft : 1
+  const safeMaxRight = maxRight && maxRight > 0 ? maxRight : safeMaxLeft
+  const x = (timestamp: number) => {
+    if (maxTimestamp === minTimestamp) {
+      return padding.left
+    }
+    return (
+      padding.left +
+      ((timestamp - minTimestamp) / (maxTimestamp - minTimestamp)) *
+        (width - padding.left - padding.right)
+    )
+  }
+  const yLeft = (value: number) =>
+    padding.top +
+    (1 - value / safeMaxLeft) * (height - padding.top - padding.bottom)
+  const yRight = (value: number) =>
+    padding.top +
+    (1 - value / safeMaxRight) * (height - padding.top - padding.bottom)
+  const startLabel = formatChartTime(minTimestamp)
+  const endLabel = formatChartTime(maxTimestamp)
+
+  return (
+    <div className="space-y-2">
+      <svg className="h-56 w-full overflow-visible" viewBox={`0 0 ${width} ${height}`} role="img">
+        <line
+          x1={padding.left}
+          x2={width - padding.right}
+          y1={height - padding.bottom}
+          y2={height - padding.bottom}
+          stroke="currentColor"
+          className="text-border"
+        />
+        <line
+          x1={padding.left}
+          x2={padding.left}
+          y1={padding.top}
+          y2={height - padding.bottom}
+          stroke="currentColor"
+          className="text-border"
+        />
+        {rightLabel ? (
+          <line
+            x1={width - padding.right}
+            x2={width - padding.right}
+            y1={padding.top}
+            y2={height - padding.bottom}
+            stroke="currentColor"
+            className="text-border"
+          />
+        ) : null}
+        <text x={padding.left - 8} y={padding.top + 4} textAnchor="end" className="fill-muted-foreground text-[11px]">
+          {formatAxisValue(safeMaxLeft, series.find((item) => item.axis !== "right")?.format)}
+        </text>
+        <text
+          x={padding.left - 8}
+          y={height - padding.bottom}
+          textAnchor="end"
+          className="fill-muted-foreground text-[11px]"
+        >
+          0
+        </text>
+        {rightLabel ? (
+          <>
+            <text
+              x={width - padding.right + 8}
+              y={padding.top + 4}
+              textAnchor="start"
+              className="fill-muted-foreground text-[11px]"
+            >
+              {formatAxisValue(safeMaxRight, series.find((item) => item.axis === "right")?.format)}
+            </text>
+            <text
+              x={width - padding.right + 8}
+              y={height - padding.bottom}
+              textAnchor="start"
+              className="fill-muted-foreground text-[11px]"
+            >
+              0
+            </text>
+          </>
+        ) : null}
+        <text x={padding.left} y={height - 8} textAnchor="start" className="fill-muted-foreground text-[11px]">
+          {startLabel}
+        </text>
+        <text
+          x={width - padding.right}
+          y={height - 8}
+          textAnchor="end"
+          className="fill-muted-foreground text-[11px]"
+        >
+          {endLabel}
+        </text>
+        <text x={padding.left} y={12} textAnchor="start" className="fill-muted-foreground text-[11px]">
+          {leftLabel}
+        </text>
+        {rightLabel ? (
+          <text x={width - padding.right} y={12} textAnchor="end" className="fill-muted-foreground text-[11px]">
+            {rightLabel}
+          </text>
+        ) : null}
+        {series.map((item) => (
+          <path
+            key={item.label}
+            d={linePath(points, x, item.axis === "right" ? yRight : yLeft, item.value)}
+            fill="none"
+            stroke={item.color}
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            strokeWidth="2"
+          />
+        ))}
+      </svg>
+      <div className="flex flex-wrap gap-3 text-xs text-muted-foreground">
+        {series.map((item) => (
+          <span key={item.label} className="inline-flex items-center gap-1">
+            <span className="size-2 rounded-full" style={{ background: item.color }} />
+            {item.label}
+          </span>
+        ))}
       </div>
     </div>
   )
@@ -1128,6 +1814,90 @@ function formatDuration(seconds: number | null | undefined): string {
   return `${minutes}m`
 }
 
+function keepSelected(current: string[], available: string[], fallbackCount: number): string[] {
+  const kept = current.filter((item) => available.includes(item))
+  if (kept.length > 0) {
+    return kept
+  }
+  return available.slice(0, fallbackCount)
+}
+
+function toggleSelection(selected: string[], value: string): string[] {
+  if (selected.includes(value)) {
+    return selected.filter((item) => item !== value)
+  }
+  return [...selected, value]
+}
+
+function matrixKey(target: string, timespan: string): string {
+  return `${target}\u0000${timespan}`
+}
+
+function maxValue<Point>(
+  points: Point[],
+  selectors: Array<(point: Point) => number | null>,
+): number {
+  let max = 0
+  for (const point of points) {
+    for (const selector of selectors) {
+      const value = selector(point)
+      if (value != null && Number.isFinite(value)) {
+        max = Math.max(max, value)
+      }
+    }
+  }
+  return max
+}
+
+function linePath<Point extends { timestamp: number }>(
+  points: Point[],
+  x: (timestamp: number) => number,
+  y: (value: number) => number,
+  value: (point: Point) => number | null,
+): string {
+  let path = ""
+  let drawing = false
+  for (const point of points) {
+    const current = value(point)
+    if (current == null || !Number.isFinite(current)) {
+      drawing = false
+      continue
+    }
+    const command = drawing ? "L" : "M"
+    path += `${command}${x(point.timestamp).toFixed(2)},${y(current).toFixed(2)}`
+    drawing = true
+  }
+  return path
+}
+
+function formatAxisValue(value: number, formatter?: (value: number) => string): string {
+  if (!formatter) {
+    return value.toFixed(1)
+  }
+  return formatter(value)
+}
+
+function formatBitRate(bitsPerSecond: number): string {
+  const units = ["bps", "Kbps", "Mbps", "Gbps", "Tbps"]
+  let value = bitsPerSecond
+  for (const unit of units) {
+    if (Math.abs(value) < 1000 || unit === units[units.length - 1]) {
+      return unit === "bps" ? `${Math.round(value)} ${unit}` : `${value.toFixed(1)} ${unit}`
+    }
+    value /= 1000
+  }
+  return `${Math.round(bitsPerSecond)} bps`
+}
+
+function formatChartTime(timestamp: number): string {
+  return new Date(timestamp * 1000).toLocaleString(undefined, {
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+  })
+}
+
 async function apiJson<T = unknown>(input: RequestInfo | URL, init?: RequestInit): Promise<T> {
   const response = await fetch(input, {
     credentials: "same-origin",
@@ -1187,8 +1957,32 @@ function toggleTheme(theme: Theme): Theme {
 
 function pageFromPath(pathname: string): PageId {
   const normalized = pathname.replace(/\/+$/, "") || "/"
+  if (normalized === "/monitor" || normalized.startsWith("/monitor/")) {
+    return "monitor"
+  }
   const match = Object.entries(pagePaths).find(([, path]) => path === normalized)
   return match ? (match[0] as PageId) : "monitor"
+}
+
+function monitorViewFromPath(pathname: string): MonitorViewId {
+  const normalized = pathname.replace(/\/+$/, "") || "/"
+  if (normalized === "/monitor/bandwidth") {
+    return "bandwidth"
+  }
+  if (normalized === "/monitor/ping") {
+    return "ping"
+  }
+  return "overview"
+}
+
+function monitorViewPath(view: MonitorViewId): string {
+  if (view === "bandwidth") {
+    return "/monitor/bandwidth"
+  }
+  if (view === "ping") {
+    return "/monitor/ping"
+  }
+  return "/monitor"
 }
 
 export default App

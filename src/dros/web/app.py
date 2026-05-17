@@ -25,6 +25,7 @@ from dros.ovpn import (
 from dros.settings import DrosSettings
 from dros.web.auth import COOKIE_NAME, WebAuthStore, resolve_auth_db_path
 from dros.web.monitor import collect_monitor_summary
+from dros.web.rrd import collect_bandwidth_series, collect_ping_series, collect_rrd_targets
 
 
 class LoginRequest(BaseModel):
@@ -130,6 +131,32 @@ def create_app(settings: DrosSettings | None = None) -> FastAPI:
     @api.get("/api/monitor/summary")
     def monitor_summary(_username: str = Depends(require_auth)) -> dict[str, object]:
         return collect_monitor_summary(settings)
+
+    @api.get("/api/monitor/rrd/targets")
+    def monitor_rrd_targets(_username: str = Depends(require_auth)) -> dict[str, object]:
+        return collect_rrd_targets(settings)
+
+    @api.get("/api/monitor/rrd/bandwidth")
+    def monitor_rrd_bandwidth(
+        target: str,
+        timespan: str = "1h",
+        _username: str = Depends(require_auth),
+    ) -> dict[str, object]:
+        try:
+            return collect_bandwidth_series(settings, target=target, timespan=timespan)
+        except ValueError as exc:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+    @api.get("/api/monitor/rrd/ping")
+    def monitor_rrd_ping(
+        target: str,
+        timespan: str = "1h",
+        _username: str = Depends(require_auth),
+    ) -> dict[str, object]:
+        try:
+            return collect_ping_series(settings, target=target, timespan=timespan)
+        except ValueError as exc:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
     @api.get("/api/openvpn/instances/{instance}/profiles")
     def openvpn_profiles(
