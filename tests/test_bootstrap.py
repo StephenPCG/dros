@@ -90,7 +90,17 @@ spec:
         sysroot / "etc/systemd/system/docker.service.d/40-dros-hook.conf"
     ).read_text(encoding="utf-8")
     assert "ExecStartPost=-/usr/local/bin/gw hook docker-start --verbose 0" in docker_hook
-    assert (sysroot / "etc/dnsmasq.conf").read_text(encoding="utf-8") == ""
+    dnsmasq_conf = (sysroot / "etc/dnsmasq.conf").read_text(encoding="utf-8")
+    assert "log-async=25" in dnsmasq_conf
+    assert "log-queries" in dnsmasq_conf
+    assert "log-facility=/var/log/dnsmasq/dnsmasq.log" in dnsmasq_conf
+    assert (sysroot / "var/log/dnsmasq").is_dir()
+    dnsmasq_logrotate = (sysroot / "etc/logrotate.d/dros-dnsmasq").read_text(
+        encoding="utf-8"
+    )
+    assert "/var/log/dnsmasq/dnsmasq.log" in dnsmasq_logrotate
+    assert "    daily" in dnsmasq_logrotate
+    assert "    rotate 90" in dnsmasq_logrotate
     assert "enable-reflector=yes" in (
         sysroot / "etc/avahi/avahi-daemon.conf"
     ).read_text(encoding="utf-8")

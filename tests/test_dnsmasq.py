@@ -47,6 +47,7 @@ spec:
     - 10.0.0.1
     - 127.0.0.1
   noResolv: true
+  noPool: true
   bogusPriv: true
   domainNeeded: true
   cacheSize: 10000
@@ -78,8 +79,11 @@ spec:
     assert "interface=br-lan" in content
     assert "listen-address=10.0.0.1" in content
     assert "no-resolv" in content
+    assert "no-poll" in content
     assert "bogus-priv" in content
     assert "domain-needed" in content
+    assert "all-servers" in content
+    assert "expand-hosts" in content
     assert "cache-size=10000" in content
     assert "log-queries" in content
     assert "log-async=25" in content
@@ -96,6 +100,37 @@ spec:
     )
     assert "/var/log/dnsmasq/dnsmasq.log" in logrotate
     assert ["systemctl", "restart", "dnsmasq"] in _commands(result)
+
+
+def test_update_dnsmasq_dns_can_disable_all_servers(tmp_path: Path) -> None:
+    settings = _settings(tmp_path)
+    settings.paths.configs.mkdir(parents=True)
+    (settings.paths.configs / "dnsmasq.yaml").write_text(
+        """
+kind: DnsmasqDNS
+metadata:
+  name: system
+spec:
+  allServers: false
+  noPoll: false
+  expandHosts: false
+  servers:
+    - 223.5.5.5
+    - 119.29.29.29
+""".lstrip(),
+        encoding="utf-8",
+    )
+
+    run_update(settings, target="dnsmasq-dns/system", console=_console(StringIO()))
+
+    content = (settings.sys_root / "etc/dnsmasq.d/dros-10-dns.conf").read_text(
+        encoding="utf-8"
+    )
+    assert "all-servers" not in content
+    assert "no-poll" not in content
+    assert "expand-hosts" not in content
+    assert "server=223.5.5.5" in content
+    assert "server=119.29.29.29" in content
 
 
 def test_update_dnsmasq_dhcp_writes_dhcp_options(tmp_path: Path) -> None:

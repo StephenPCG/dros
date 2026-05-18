@@ -176,6 +176,8 @@ Bootstrap currently manages:
 - `/etc/docker/daemon.json`
 - `/etc/systemd/system/docker.service.d/40-dros-hook.conf`
 - `/etc/dnsmasq.conf`
+- `/etc/logrotate.d/dros-dnsmasq`
+- `/var/log/dnsmasq`
 - `/etc/avahi/avahi-daemon.conf`
 - `/etc/dros/nftables.d`
 - `/etc/network/if-up.d/dros-route`
@@ -191,6 +193,10 @@ Bootstrap currently manages:
 `tailscaleAptMirror` 只用于 Tailscale apt source。Tailscale apt GPG key 固定从官方
 `https://pkgs.tailscale.com/stable` 下载，因为部分镜像站不会同步 `*.noarmor.gpg`
 文件。
+
+Bootstrap 会在 `/etc/dnsmasq.conf` 中启用 dnsmasq 查询日志，写入
+`log-async=25`、`log-queries`、`log-facility=/var/log/dnsmasq/dnsmasq.log`。对应
+logrotate 每天轮转一次，保留 90 份，约等于 3 个月。
 
 DROS intentionally standardizes Debian base repositories on the one-line
 `/etc/apt/sources.list` file. Bootstrap removes

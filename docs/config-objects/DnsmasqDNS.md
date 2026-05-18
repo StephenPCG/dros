@@ -11,7 +11,9 @@
 /etc/dnsmasq.d/dros-10-dns.conf
 ```
 
-如果配置了 `logFile`，DROS 还会生成 `/etc/logrotate.d/dros-dnsmasq`。
+`gw bootstrap` 会在 `/etc/dnsmasq.conf` 中配置默认查询日志：
+`log-async=25`、`log-queries`、`log-facility=/var/log/dnsmasq/dnsmasq.log`，并生成
+`/etc/logrotate.d/dros-dnsmasq`。
 
 ## 内置配置
 
@@ -83,10 +85,11 @@ spec:
 - `noResolv`：渲染为 `no-resolv`，默认 `true`
 - `noNegcache`：渲染为 `no-negcache`，默认 `true`
 - `noHosts`：渲染为 `no-hosts`，默认 `true`
-- `allServers`：渲染为 `all-servers`，默认 `false`
+- `noPoll`：渲染为 `no-poll`，默认 `true`。兼容接受 `noPool` 作为输入别名。
+- `allServers`：渲染为 `all-servers`，默认 `true`
 - `bogusPriv`：渲染为 `bogus-priv`，默认 `true`
 - `domainNeeded`：渲染为 `domain-needed`，默认 `true`
-- `expandHosts`：渲染为 `expand-hosts`，默认 `false`
+- `expandHosts`：渲染为 `expand-hosts`，默认 `true`
 - `localTtl`：渲染为 `local-ttl=...`，默认 `null`
 - `cacheSize`：渲染为 `cache-size=...`，默认 `null`
 - `port`：渲染为 `port=...`，默认 `null`

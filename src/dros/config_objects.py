@@ -196,13 +196,17 @@ class DnsmasqDNSConfig(BaseModel):
     no_resolv: bool = Field(True, validation_alias=AliasChoices("no_resolv", "noResolv"))
     no_negcache: bool = Field(True, validation_alias=AliasChoices("no_negcache", "noNegcache"))
     no_hosts: bool = Field(True, validation_alias=AliasChoices("no_hosts", "noHosts"))
-    all_servers: bool = Field(False, validation_alias=AliasChoices("all_servers", "allServers"))
+    no_poll: bool = Field(
+        True,
+        validation_alias=AliasChoices("no_poll", "noPoll", "no_pool", "noPool"),
+    )
+    all_servers: bool = Field(True, validation_alias=AliasChoices("all_servers", "allServers"))
     bogus_priv: bool = Field(True, validation_alias=AliasChoices("bogus_priv", "bogusPriv"))
     domain_needed: bool = Field(
         True,
         validation_alias=AliasChoices("domain_needed", "domainNeeded"),
     )
-    expand_hosts: bool = Field(False, validation_alias=AliasChoices("expand_hosts", "expandHosts"))
+    expand_hosts: bool = Field(True, validation_alias=AliasChoices("expand_hosts", "expandHosts"))
     local_ttl: int | None = Field(None, validation_alias=AliasChoices("local_ttl", "localTtl"))
     cache_size: int | None = Field(None, validation_alias=AliasChoices("cache_size", "cacheSize"))
     log_queries: bool = Field(False, validation_alias=AliasChoices("log_queries", "logQueries"))
