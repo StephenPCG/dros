@@ -30,8 +30,12 @@ AVAILABLE_IP_LIST_SOURCES = (
     "github",
     "google",
     "telegram",
+    "tencent",
     "wikipedia",
 )
+
+TENCENT_ASNS = (45090, 132203, 133478, 132591, 139341, 9390, 137876)
+RIPESTAT_ANNOUNCED_PREFIXES_URL = "https://stat.ripe.net/data/announced-prefixes/data.json"
 
 IpListFamily = Literal["mixed", "ipv4", "ipv6"]
 RequestedFamily = Literal["auto", "all", "ipv4", "ipv6"]
@@ -268,6 +272,31 @@ class IpListUpdater:
         ipv4, ipv6 = _split_families(cidrs)
         return FetchResult(name="telegram", source="https://core.telegram.org/resources/cidr.txt", ipv4=ipv4, ipv6=ipv6)
 
+    def _fetch_tencent(self) -> FetchResult:
+        cidrs: list[str] = []
+        for asn in TENCENT_ASNS:
+            url = (
+                f"{RIPESTAT_ANNOUNCED_PREFIXES_URL}?resource=AS{asn}"
+                "&min_peers_seeing=1&sourceapp=dros_gateway"
+            )
+            payload = self._get_json(url)
+            prefixes = payload.get("data", {}).get("prefixes", [])
+            if not isinstance(prefixes, list):
+                raise ValueError(f"expected RIPEstat prefixes list for AS{asn}")
+            for item in prefixes:
+                if not isinstance(item, dict):
+                    continue
+                prefix = item.get("prefix")
+                if isinstance(prefix, str) and ":" in prefix:
+                    cidrs.append(prefix)
+        source_asns = ", ".join(f"AS{asn}" for asn in TENCENT_ASNS)
+        return FetchResult(
+            name="tencent",
+            source=f"RIPEstat announced-prefixes for {source_asns}",
+            ipv4=[],
+            ipv6=_collapse_cidrs(cidrs),
+        )
+
     def _fetch_wikipedia(self) -> FetchResult:
         text = self._get_text("https://wikitech.wikimedia.org/wiki/IP_and_AS_allocations")
         ipv4, ipv6 = _split_families(_normalize_cidrs(CIDR_RE.findall(text)))
@@ -461,6 +490,22 @@ def _normalize_cidrs(values: Iterable[str]) -> list[str]:
         networks.add(network)
     sorted_networks = sorted(networks, key=lambda item: (item.version, int(item.network_address), item.prefixlen))
     return [str(network) for network in sorted_networks]
+
+
+def _collapse_cidrs(values: Iterable[str]) -> list[str]:
+    networks: list[ipaddress.IPv4Network | ipaddress.IPv6Network] = []
+    for line_number, raw in enumerate(values, start=1):
+        candidate = raw.split("#", 1)[0].strip()
+        if not candidate:
+            continue
+        try:
+            network = ipaddress.ip_network(candidate, strict=False)
+        except ValueError:
+            print(f"warning: skipped invalid CIDR in upstream:{line_number}: {raw.rstrip()}", file=sys.stderr)
+            continue
+        networks.append(network)
+    collapsed = ipaddress.collapse_addresses(networks)
+    return [str(network) for network in collapsed]
 
 
 def _split_families(values: Iterable[str]) -> tuple[list[str], list[str]]:

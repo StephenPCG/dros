@@ -52,6 +52,13 @@
       "source": "https://core.telegram.org/resources/cidr.txt"
     },
     {
+      "ipv4_count": 0,
+      "ipv6_count": 151,
+      "name": "tencent",
+      "ok": true,
+      "source": "RIPEstat announced-prefixes for AS45090, AS132203, AS133478, AS132591, AS139341, AS9390, AS137876"
+    },
+    {
       "ipv4_count": 7,
       "ipv6_count": 3,
       "name": "wikipedia",
@@ -67,6 +74,7 @@
     "github",
     "google",
     "telegram",
+    "tencent",
     "wikipedia"
   ]
 }

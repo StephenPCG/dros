@@ -119,10 +119,15 @@ gw ip-list update
 gw ip-list sources
 ```
 
+当前内置 source 包括 `amazon`、`china`、`cloudflare`、`fastly`、`github`、
+`google`、`telegram`、`tencent`、`wikipedia`。其中 `tencent` 通过 RIPEstat
+查询腾讯相关 ASN 当前宣告的 IPv6 前缀，IPv4 列表保持为空，适合只对腾讯 IPv6
+做 `unreachable` 之类的降级策略。
+
 只更新部分 source：
 
 ```sh
-gw ip-list update china github
+gw ip-list update china github tencent
 ```
 
 `gw ip-list update` 成功后会向 drosd 队列写入 `route-refresh` 事件，由 daemon 后续刷新路由。

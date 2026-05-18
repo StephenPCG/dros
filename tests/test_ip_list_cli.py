@@ -84,3 +84,4 @@ def test_ip_list_sources_command_lists_builtin_sources(capsys) -> None:
     output = capsys.readouterr().out
     assert "china" in output
     assert "github" in output
+    assert "tencent" in output
