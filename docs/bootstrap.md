@@ -188,6 +188,10 @@ Bootstrap currently manages:
 - `/usr/lib/dros/openvpn-iface`
 - `/usr/share/keyrings/tailscale-archive-keyring.gpg`
 
+`tailscaleAptMirror` 只用于 Tailscale apt source。Tailscale apt GPG key 固定从官方
+`https://pkgs.tailscale.com/stable` 下载，因为部分镜像站不会同步 `*.noarmor.gpg`
+文件。
+
 DROS intentionally standardizes Debian base repositories on the one-line
 `/etc/apt/sources.list` file. Bootstrap removes
 `/etc/apt/sources.list.d/debian.sources` before running apt package installs, so

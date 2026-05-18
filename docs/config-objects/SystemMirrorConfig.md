@@ -112,8 +112,10 @@ Docker apt GPG key 到 `/etc/apt/keyrings/docker.asc`。
 
 Tailscale apt mirror。
 
-`gw bootstrap` 会用它生成 `/etc/apt/sources.list.d/tailscale.list`，并在真实系统上从该 mirror 下载
-Tailscale apt GPG key 到 `/usr/share/keyrings/tailscale-archive-keyring.gpg`。
+`gw bootstrap` 会用它生成 `/etc/apt/sources.list.d/tailscale.list`。Tailscale apt GPG key
+固定从官方 `https://pkgs.tailscale.com/stable` 下载到
+`/usr/share/keyrings/tailscale-archive-keyring.gpg`，因为部分镜像站不会同步 `*.noarmor.gpg`
+文件。
 
 默认值：`https://mirrors.ustc.edu.cn/tailscale`。
 

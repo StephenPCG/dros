@@ -6,6 +6,7 @@ from dros.config_objects import ConfigObject, SystemMirrorConfig
 from dros.plugins.base import BootstrapContext, DrosPlugin, UpdateContext
 
 PACKAGES = frozenset({"ca-certificates", "curl"})
+TAILSCALE_APT_KEY_MIRROR = "https://pkgs.tailscale.com/stable"
 MANAGED_FILES = frozenset(
     {
         "/etc/apt/sources.list",
@@ -59,7 +60,7 @@ def bootstrap(context: BootstrapContext) -> None:
             [
                 "curl",
                 "-fsSL",
-                f"{mirror.tailscale_apt_mirror.rstrip('/')}/debian/{codename}.noarmor.gpg",
+                f"{TAILSCALE_APT_KEY_MIRROR}/debian/{codename}.noarmor.gpg",
                 "-o",
                 "/usr/share/keyrings/tailscale-archive-keyring.gpg",
             ],

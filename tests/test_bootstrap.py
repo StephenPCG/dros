@@ -74,6 +74,11 @@ spec:
         if action.command and any("tailscale-archive-keyring.gpg" in part for part in action.command)
     ]
     assert any(
+        "https://pkgs.tailscale.com/stable/debian/trixie.noarmor.gpg" in part
+        for command in tailscale_key_commands
+        for part in command
+    )
+    assert not any(
         "https://mirror.example/tailscale/debian/trixie.noarmor.gpg" in part
         for command in tailscale_key_commands
         for part in command
