@@ -776,6 +776,107 @@ spec:
     assert any("ip addr replace 198.51.100.10/32 dev external0" in command for command in commands)
 
 
+def test_update_interface_writes_tailscale_service_config_and_up_command(
+    tmp_path: Path,
+) -> None:
+    settings = _settings(tmp_path)
+    settings.paths.configs.mkdir(parents=True)
+    (settings.paths.configs / "tailscale.yaml").write_text(
+        """
+kind: DevGroup
+metadata:
+  name: vpn
+spec:
+  id: 4
+---
+kind: Interface
+metadata:
+  name: tailscale0
+spec:
+  type: tailscale
+  loginServer: https://hs.example.net:8443
+  hostname: homelab-gw
+  acceptRoutes: false
+  acceptDns: false
+  netfilterMode: off
+  advertiseRoutes:
+    - 10.6.0.0/16
+    - fd02::/48
+  advertiseTags:
+    - tag:gateway
+  snatSubnetRoutes: false
+  devGroup: vpn
+""".lstrip(),
+        encoding="utf-8",
+    )
+
+    result = run_update(settings, target="iface/tailscale0", console=_console(StringIO()))
+
+    service = (
+        settings.sys_root / "etc/systemd/system/dros-tailscaled-tailscale0.service"
+    ).read_text(encoding="utf-8")
+    socket_path = settings.paths.run / "tailscale/tailscale0.sock"
+    assert "--tun=tailscale0" in service
+    assert f"--socket={socket_path}" in service
+    assert "--statedir=/var/lib/tailscale/tailscale0" in service
+    assert not _interface_file_exists(settings, "tailscale0")
+    commands = [" ".join(action.command or []) for action in result.actions]
+    assert any("systemctl daemon-reload" in command for command in commands)
+    assert any(
+        "systemctl enable --now dros-tailscaled-tailscale0.service" in command
+        for command in commands
+    )
+    assert any(
+        "systemctl restart dros-tailscaled-tailscale0.service" in command
+        for command in commands
+    )
+    assert any(
+        f"tailscale --socket={socket_path} up --reset --login-server=https://hs.example.net:8443 "
+        "--hostname=homelab-gw --accept-routes=false --accept-dns=false "
+        "--netfilter-mode=off --timeout=10s --advertise-routes=10.6.0.0/16,fd02::/48 "
+        "--advertise-tags=tag:gateway --snat-subnet-routes=false" in command
+        for command in commands
+    )
+    assert any("ip link set dev tailscale0 group 4" in command for command in commands)
+
+
+def test_update_supports_multiple_tailscale_interfaces(tmp_path: Path) -> None:
+    settings = _settings(tmp_path)
+    settings.paths.configs.mkdir(parents=True)
+    (settings.paths.configs / "tailscale.yaml").write_text(
+        """
+kind: Interface
+metadata:
+  name: tailscale0
+spec:
+  type: tailscale
+---
+kind: Interface
+metadata:
+  name: ts1
+spec:
+  type: tailscale
+""".lstrip(),
+        encoding="utf-8",
+    )
+
+    result = run_update(settings, target="ifaces", console=_console(StringIO()))
+
+    commands = [" ".join(action.command or []) for action in result.actions]
+    assert (
+        settings.sys_root / "etc/systemd/system/dros-tailscaled-tailscale0.service"
+    ).exists()
+    assert (settings.sys_root / "etc/systemd/system/dros-tailscaled-ts1.service").exists()
+    assert any(
+        f"tailscale --socket={settings.paths.run / 'tailscale/tailscale0.sock'} up" in command
+        for command in commands
+    )
+    assert any(
+        f"tailscale --socket={settings.paths.run / 'tailscale/ts1.sock'} up" in command
+        for command in commands
+    )
+
+
 def test_update_pppoe_renders_gwtool_route_flags(tmp_path: Path) -> None:
     settings = _settings(tmp_path)
     settings.paths.configs.mkdir(parents=True)

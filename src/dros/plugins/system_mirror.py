@@ -10,6 +10,8 @@ MANAGED_FILES = frozenset(
     {
         "/etc/apt/sources.list",
         "/etc/apt/sources.list.d/docker-ce.list",
+        "/etc/apt/sources.list.d/tailscale.list",
+        "/usr/share/keyrings/tailscale-archive-keyring.gpg",
     }
 )
 
@@ -49,10 +51,32 @@ def bootstrap(context: BootstrapContext) -> None:
             real_only=True,
         )
         context.executor.run(["chmod", "a+r", "/etc/apt/keyrings/docker.asc"], real_only=True)
-    context.executor.write_file(
+    context.executor.ensure_dir("/usr/share/keyrings")
+    if not context.executor.exists("/usr/share/keyrings/tailscale-archive-keyring.gpg"):
+        context.executor.run(
+            [
+                "curl",
+                "-fsSL",
+                f"{mirror.tailscale_apt_mirror.rstrip('/')}/debian/{codename}.noarmor.gpg",
+                "-o",
+                "/usr/share/keyrings/tailscale-archive-keyring.gpg",
+            ],
+            real_only=True,
+        )
+        context.executor.run(
+            ["chmod", "a+r", "/usr/share/keyrings/tailscale-archive-keyring.gpg"],
+            real_only=True,
+        )
+    docker_source_changed = context.executor.write_file(
         "/etc/apt/sources.list.d/docker-ce.list",
         _docker_source(mirror.docker_apt_mirror, codename, arch),
     )
+    tailscale_source_changed = context.executor.write_file(
+        "/etc/apt/sources.list.d/tailscale.list",
+        _tailscale_source(mirror.tailscale_apt_mirror, codename),
+    )
+    if docker_source_changed or tailscale_source_changed:
+        context.executor.mark_package_indexes_stale()
 
 
 def validate(context: UpdateContext, objects: list[ConfigObject]) -> list[str]:
@@ -92,6 +116,14 @@ def _docker_source(docker_apt_mirror: str, codename: str, arch: str) -> str:
     return (
         f"deb [arch={arch} signed-by=/etc/apt/keyrings/docker.asc] "
         f"{mirror}/linux/debian {codename} stable\n"
+    )
+
+
+def _tailscale_source(tailscale_apt_mirror: str, codename: str) -> str:
+    mirror = tailscale_apt_mirror.rstrip("/")
+    return (
+        "deb [signed-by=/usr/share/keyrings/tailscale-archive-keyring.gpg] "
+        f"{mirror}/debian {codename} main\n"
     )
 
 

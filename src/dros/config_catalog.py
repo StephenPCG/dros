@@ -33,6 +33,7 @@ metadata:
 spec:
   aptMirror: https://mirrors.ustc.edu.cn/debian
   dockerAptMirror: https://mirrors.ustc.edu.cn/docker-ce
+  tailscaleAptMirror: https://mirrors.ustc.edu.cn/tailscale
   dockerRegistryMirror: ""
 """,
     ),

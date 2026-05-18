@@ -40,13 +40,14 @@ metadata:
 spec:
   aptMirror: https://mirror.example/debian
   dockerAptMirror: https://mirror.example/docker-ce
+  tailscaleAptMirror: https://mirror.example/tailscale
   dockerRegistryMirror: https://registry.example
 """.lstrip(),
         encoding="utf-8",
     )
 
     registry = create_default_registry()
-    run_bootstrap(
+    result = run_bootstrap(
         settings,
         console=_console(StringIO()),
         installed_packages=registry.owned_packages(),
@@ -64,6 +65,19 @@ spec:
     assert "https://mirror.example/docker-ce/linux/debian" in (
         sysroot / "etc/apt/sources.list.d/docker-ce.list"
     ).read_text(encoding="utf-8")
+    assert "https://mirror.example/tailscale/debian" in (
+        sysroot / "etc/apt/sources.list.d/tailscale.list"
+    ).read_text(encoding="utf-8")
+    tailscale_key_commands = [
+        action.command or []
+        for action in result.actions
+        if action.command and any("tailscale-archive-keyring.gpg" in part for part in action.command)
+    ]
+    assert any(
+        "https://mirror.example/tailscale/debian/trixie.noarmor.gpg" in part
+        for command in tailscale_key_commands
+        for part in command
+    )
     docker_config = (sysroot / "etc/docker/daemon.json").read_text(encoding="utf-8")
     assert '"iptables": false' in docker_config
     assert '"https://registry.example"' in docker_config
@@ -146,7 +160,7 @@ def test_bootstrap_installs_only_missing_packages(tmp_path: Path) -> None:
     settings = _settings(tmp_path)
     settings.paths.configs.mkdir(parents=True)
     owned_packages = create_default_registry().owned_packages()
-    installed_packages = owned_packages - {"bridge-utils", "dnsmasq", "docker-ce"}
+    installed_packages = owned_packages - {"bridge-utils", "dnsmasq", "docker-ce", "tailscale"}
 
     result = run_bootstrap(
         settings,
@@ -162,8 +176,45 @@ def test_bootstrap_installs_only_missing_packages(tmp_path: Path) -> None:
     assert any("bridge-utils" in command for command in install_commands)
     assert any("dnsmasq" in command for command in install_commands)
     assert any("docker-ce" in command for command in install_commands)
+    assert any("tailscale" in command for command in install_commands)
     assert not any("curl" in command for command in install_commands)
     assert all("Dpkg::Options::=--force-confold" in command for command in install_commands)
+    commands = [" ".join(action.command or []) for action in result.actions]
+    assert any("systemctl disable --now tailscaled.service" in command for command in commands)
+
+
+def test_bootstrap_refreshes_package_cache_after_external_sources_change(
+    tmp_path: Path,
+) -> None:
+    settings = _settings(tmp_path)
+    settings.paths.configs.mkdir(parents=True)
+    owned_packages = create_default_registry().owned_packages()
+    installed_packages = owned_packages - {"curl", "docker-ce", "tailscale"}
+
+    result = run_bootstrap(
+        settings,
+        console=_console(StringIO()),
+        installed_packages=installed_packages,
+    )
+
+    apt_update_indexes = [
+        index
+        for index, action in enumerate(result.actions)
+        if action.command == ["apt-get", "update"]
+    ]
+    docker_source_index = next(
+        index
+        for index, action in enumerate(result.actions)
+        if action.path == "/etc/apt/sources.list.d/docker-ce.list"
+    )
+    tailscale_source_index = next(
+        index
+        for index, action in enumerate(result.actions)
+        if action.path == "/etc/apt/sources.list.d/tailscale.list"
+    )
+
+    assert any(index > docker_source_index for index in apt_update_indexes)
+    assert any(index > tailscale_source_index for index in apt_update_indexes)
 
 
 def test_bootstrap_disables_cloud_init_hosts_management_when_cloud_init_exists(

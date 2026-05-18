@@ -16,6 +16,7 @@ PACKAGES = frozenset(
         "openvpn-auth-ldap",
         "pppoe",
         "radvd",
+        "tailscale",
         "vlan",
         "wide-dhcpv6-client",
         "wireguard-tools",
@@ -62,6 +63,11 @@ def bootstrap(context: BootstrapContext) -> None:
     context.executor.write_file("/etc/dnsmasq.conf", "")
     context.executor.write_file("/etc/avahi/avahi-daemon.conf", _avahi_daemon_conf())
     context.executor.install_missing_packages(PACKAGES)
+    context.executor.run(
+        ["systemctl", "disable", "--now", "tailscaled.service"],
+        check=False,
+        real_only=True,
+    )
 
     if hostname_changed and _runtime_hostname(context) != network.hostname:
         context.executor.run(["hostname", network.hostname], real_only=True)

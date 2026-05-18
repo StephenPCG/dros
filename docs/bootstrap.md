@@ -17,11 +17,13 @@ any selected object is invalid.
 
 ## Initial Plugins
 
-- `system.mirror` owns Debian apt sources and the Docker CE apt source.
+- `system.mirror` owns Debian apt sources, the Docker CE apt source, and the
+  Tailscale apt source.
 - `network.core` owns hostname, hosts, sysctl, the DROS nftables snippet
   directory, dnsmasq, avahi, and core network packages.
 - `network.interfaces` owns `DevGroup` and `Interface` objects, ifupdown
-  fragments, PPP hook dispatch, and runtime interface properties.
+  fragments, PPP hook dispatch, Tailscale service defaults, and runtime
+  interface properties.
 - `network.ipv6pd` owns `IPv6PD` objects, wide-dhcpv6 configuration, radvd
   configuration, IPv6 refresh hooks, and the IPv6PD nftables snippet.
 - `network.routing` owns `FwMark`, `Gateway`, `RouteTable`, and
@@ -83,6 +85,7 @@ The bootstrap singleton objects currently used are:
 - `SystemMirrorConfig`, recommended name `system`
   - `aptMirror`, default `https://mirrors.ustc.edu.cn/debian`
   - `dockerAptMirror`, default `https://mirrors.ustc.edu.cn/docker-ce`
+  - `tailscaleAptMirror`, default `https://mirrors.ustc.edu.cn/tailscale`
   - `dockerRegistryMirror`, default empty
 - `Collectd`, fixed name `system`
   - `interval`, default `10`
@@ -168,6 +171,7 @@ Bootstrap currently manages:
 - `/etc/sysctl.d/99-dros.conf`
 - `/etc/apt/sources.list`
 - `/etc/apt/sources.list.d/docker-ce.list`
+- `/etc/apt/sources.list.d/tailscale.list`
 - `/etc/docker/daemon.json`
 - `/etc/systemd/system/docker.service.d/40-dros-hook.conf`
 - `/etc/dnsmasq.conf`
@@ -181,6 +185,11 @@ Bootstrap currently manages:
 - `/etc/ppp/ipv6-up.d/dros-hook`
 - `/etc/ppp/ip-down.d/dros-hook`
 - `/usr/lib/dros/openvpn-iface`
+- `/usr/share/keyrings/tailscale-archive-keyring.gpg`
+
+Bootstrap also disables the package-provided `tailscaled.service`. DROS-managed
+Tailscale interfaces use per-interface units named `dros-tailscaled-<name>.service`
+so one gateway can join multiple tailnets at the same time.
 
 Bootstrap intentionally does not manage `/etc/nftables.conf`. The operating
 system default stays in place until a `Firewall` object is applied.
@@ -188,8 +197,9 @@ system default stays in place until a `Firewall` object is applied.
 `gw update` additionally manages files such as
 `/etc/nftables.conf`, `/etc/dros/nftables.d/10-firewall.nft`, interface-owned
 listen snippets under `/etc/dros/nftables.d/30-interface-*.nft`, and
-`/etc/iproute2/rt_tables.d/dros.conf`, plus dnsmasq include files under
-`/etc/dnsmasq.d/dros-*.conf`. Route updates are rendered to
+`/etc/iproute2/rt_tables.d/dros.conf`, per-interface Tailscale systemd units
+under `/etc/systemd/system/dros-tailscaled-*.service`, plus dnsmasq include
+files under `/etc/dnsmasq.d/dros-*.conf`. Route updates are rendered to
 `{paths.run}/tmp/update-route.sh` first, then applied from that script; each
 selected route table is written through a separate `ip -batch` block.
 

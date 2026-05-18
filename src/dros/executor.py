@@ -274,6 +274,9 @@ class SystemExecutor:
         )
         return missing
 
+    def mark_package_indexes_stale(self) -> None:
+        self._apt_updated = False
+
     def installed_packages(self) -> set[str]:
         if self._installed_packages_override is not None:
             return set(self._installed_packages_override)

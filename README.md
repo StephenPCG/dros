@@ -23,6 +23,7 @@ previous rewrite.
 uv sync
 uv run gw help
 uv run gw update iface/br0
+uv run gw update iface/tailscale0
 uv run gw ovpn list instances
 uv run gw restart daemon
 uv run gw restart web
@@ -52,6 +53,12 @@ Bootstrap and plugin design notes live in `docs/bootstrap.md`.
 
 OpenVPN instance, profile, certificate, and Web management notes live in
 `docs/openvpn.md`.
+
+Headscale is available as `DockerApp app=headscale`. Tailscale client support is
+modeled as `Interface type=tailscale`; bootstrap installs the `tailscale`
+package from the configured Tailscale apt mirror. Each Tailscale interface runs
+its own `dros-tailscaled-<name>.service`; use `gw ts <name> <tailscale cmd>` to
+run the Tailscale CLI against that interface's socket.
 
 ## Install
 

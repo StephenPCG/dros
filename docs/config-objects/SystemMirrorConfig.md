@@ -6,6 +6,7 @@
 
 - Debian apt mirror
 - Docker CE apt mirror
+- Tailscale apt mirror
 - Docker registry mirror
 
 这是单例配置。DROS 只期望当前配置目录 overlay 后存在一个有效的
@@ -28,6 +29,7 @@ metadata:
 spec:
   aptMirror: https://mirrors.ustc.edu.cn/debian
   dockerAptMirror: https://mirrors.ustc.edu.cn/docker-ce
+  tailscaleAptMirror: https://mirrors.ustc.edu.cn/tailscale
   dockerRegistryMirror: ""
 ```
 
@@ -41,6 +43,7 @@ metadata:
 spec:
   aptMirror: https://mirrors.ustc.edu.cn/debian
   dockerAptMirror: https://mirrors.ustc.edu.cn/docker-ce
+  tailscaleAptMirror: https://mirrors.ustc.edu.cn/tailscale
 ```
 
 如果需要 Docker registry mirror：
@@ -104,6 +107,15 @@ Docker CE apt mirror。
 Docker apt GPG key 到 `/etc/apt/keyrings/docker.asc`。
 
 默认值：`https://mirrors.ustc.edu.cn/docker-ce`。
+
+### `spec.tailscaleAptMirror`
+
+Tailscale apt mirror。
+
+`gw bootstrap` 会用它生成 `/etc/apt/sources.list.d/tailscale.list`，并在真实系统上从该 mirror 下载
+Tailscale apt GPG key 到 `/usr/share/keyrings/tailscale-archive-keyring.gpg`。
+
+默认值：`https://mirrors.ustc.edu.cn/tailscale`。
 
 ### `spec.dockerRegistryMirror`
 

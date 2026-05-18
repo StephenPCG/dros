@@ -37,6 +37,7 @@ APP_IMAGES = {
     "ddns-go": ("jeessy/ddns-go", "latest"),
     "unifi": ("ghcr.io/goofball222/unifi", "10.3"),
     "certimate": ("certimate/certimate", "latest"),
+    "headscale": ("docker.io/headscale/headscale", "v0.28.0-beta.2"),
 }
 MANAGED_FILES = frozenset(
     {
@@ -68,6 +69,9 @@ class ComposeProject:
     devices: list[str] = field(default_factory=list)
     privileged: bool = False
     command: str | list[str] | None = None
+    read_only: bool = False
+    tmpfs: list[str] = field(default_factory=list)
+    healthcheck: dict[str, Any] | None = None
     dns_names: list[str] = field(default_factory=list)
     additional_domains: list[str] = field(default_factory=list)
 
@@ -169,6 +173,9 @@ def _validate_app(
         ("spec.imageName", config.image_name),
         ("spec.imageTag", config.image_tag),
         ("spec.variant", config.variant),
+        ("spec.serverUrl", config.server_url),
+        ("spec.listenAddr", config.listen_addr),
+        ("spec.metricsListenAddr", config.metrics_listen_addr),
     ):
         if value is not None:
             _validate_single_line(obj, label, value, errors)
@@ -187,6 +194,23 @@ def _validate_app(
         _validate_app_file(obj, config.nginx_conf_file, errors, "spec.nginxConfFile")
     _validate_app_files(obj, config.conf_files, errors, path_prefix="spec.confFiles")
     _validate_mounts(context, obj, config.mounts, errors, path_prefix="spec.mounts")
+    if config.app != "headscale":
+        if config.server_url is not None:
+            errors.append(f"{obj.kind}/{obj.name}: spec.serverUrl is only supported for app headscale")
+        if _spec_has_any(obj, "listenAddr", "listen_addr"):
+            errors.append(f"{obj.kind}/{obj.name}: spec.listenAddr is only supported for app headscale")
+        if _spec_has_any(obj, "metricsListenAddr", "metrics_listen_addr"):
+            errors.append(
+                f"{obj.kind}/{obj.name}: spec.metricsListenAddr is only supported for app headscale"
+            )
+        if config.raw_config is not None:
+            errors.append(f"{obj.kind}/{obj.name}: spec.rawConfig is only supported for app headscale")
+    elif config.raw_config is None and config.server_url is None:
+        errors.append(f"{obj.kind}/{obj.name}: spec.serverUrl is required for app headscale")
+
+
+def _spec_has_any(obj: ConfigObject, *keys: str) -> bool:
+    return any(key in obj.spec for key in keys)
 
 
 def _validate_common_container_fields(
@@ -413,6 +437,26 @@ def _app_project(obj: ConfigObject, config: DockerAppConfig) -> ComposeProject:
                 ]
             )
         )
+    elif config.app == "headscale":
+        mounts.extend(
+            _mounts_from_dicts(
+                [
+                    {
+                        "sourceType": "inline",
+                        "source": _headscale_config(config),
+                        "name": "config.yaml",
+                        "target": "/etc/headscale/config.yaml",
+                        "mode": "ro",
+                    },
+                    {
+                        "sourceType": "data-dir",
+                        "source": "data",
+                        "target": "/var/lib/headscale",
+                        "mode": "rw",
+                    },
+                ]
+            )
+        )
     mounts.extend(config.mounts)
     return ComposeProject(
         obj=obj,
@@ -421,9 +465,45 @@ def _app_project(obj: ConfigObject, config: DockerAppConfig) -> ComposeProject:
         network=config.network,
         environment={"TZ": "Asia/Shanghai", **dict(config.environment)},
         mounts=mounts,
+        command="serve" if config.app == "headscale" else None,
+        read_only=config.app == "headscale",
+        tmpfs=["/var/run/headscale"] if config.app == "headscale" else [],
+        healthcheck=(
+            {"test": ["CMD", "headscale", "health"]} if config.app == "headscale" else None
+        ),
         dns_names=list(config.dns_names),
         additional_domains=list(config.additional_domains),
     )
+
+
+def _headscale_config(config: DockerAppConfig) -> str:
+    if config.raw_config is not None:
+        return _with_trailing_newline(config.raw_config)
+    payload = {
+        "server_url": config.server_url,
+        "listen_addr": config.listen_addr,
+        "metrics_listen_addr": config.metrics_listen_addr,
+        "database": {
+            "type": "sqlite",
+            "sqlite": {"path": "/var/lib/headscale/db.sqlite"},
+        },
+        "noise": {"private_key_path": "/var/lib/headscale/noise_private.key"},
+        "prefixes": {
+            "v4": "100.64.0.0/10",
+            "v6": "fd7a:115c:a1e0::/48",
+        },
+        "derp": {
+            "server": {"enabled": False},
+            "urls": ["https://controlplane.tailscale.com/derpmap/default"],
+            "paths": [],
+        },
+        "log": {"level": "info"},
+    }
+    return yaml.safe_dump(payload, sort_keys=False, allow_unicode=False)
+
+
+def _with_trailing_newline(value: str) -> str:
+    return value if value.endswith("\n") else f"{value}\n"
 
 
 def _nginx_conf_mount(
@@ -678,6 +758,12 @@ def _service(project: ComposeProject, volumes: list[str]) -> dict[str, Any]:
         service["privileged"] = True
     if project.command:
         service["command"] = project.command
+    if project.read_only:
+        service["read_only"] = True
+    if project.tmpfs:
+        service["tmpfs"] = project.tmpfs
+    if project.healthcheck:
+        service["healthcheck"] = project.healthcheck
     return service
 
 

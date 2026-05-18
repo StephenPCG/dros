@@ -9,16 +9,17 @@ import time
 from collections.abc import Sequence
 from contextlib import contextmanager
 from pathlib import Path
+from typing import Annotated
 
 import yaml
-from cyclopts import App
+from cyclopts import App, Parameter
 from rich.console import Console
 
 from dros import __version__
 from dros.bootstrap import run_bootstrap
 from dros.cli.privilege import path_writable_for_current_user, reexec_with_sudo
 from dros.cli.services import restart_local_service
-from dros.config_objects import DnsmasqChinaNamesConfig, load_config_objects
+from dros.config_objects import DnsmasqChinaNamesConfig, InterfaceConfig, load_config_objects
 from dros.config_catalog import render_config_object_example
 from dros.dnsmasq_china_names import DnsmasqChinaNamesUpdater
 from dros.events import enqueue_event, process_event
@@ -48,6 +49,7 @@ from dros.executor import SystemExecutor
 from dros.plugins import create_default_registry
 from dros.plugins.base import UpdateContext
 from dros.plugins.network_xfrm import start_xfrm, stop_xfrm
+from dros.plugins.network_interfaces import tailscale_socket_path
 from dros.config_objects import XfrmTransportConfig
 from dros.web.auth import WebAuthStore, resolve_auth_db_path
 
@@ -82,6 +84,11 @@ ovpn_cert_app = App(name="cert", help="OpenVPN certificate operations.")
 ovpn_app.command(ovpn_cert_app)
 ovpn_crl_app = App(name="crl", help="OpenVPN CRL operations.")
 ovpn_app.command(ovpn_crl_app)
+
+TailscaleArgs = Annotated[
+    list[str],
+    Parameter(consume_multiple=True, allow_leading_hyphen=True),
+]
 
 
 def _not_ready(command: str) -> None:
@@ -171,6 +178,27 @@ def start(target: str, verbose: int = 1) -> None:
 def stop(target: str, verbose: int = 1) -> None:
     """Stop a runtime object that supports stop semantics."""
     _xfrm_lifecycle("stop", target, verbose)
+
+
+@app.command(name="tailscale", alias="ts")
+def tailscale_command(iface_name: str, tailscale_args: TailscaleArgs) -> None:
+    """Run tailscale CLI against a DROS-managed tailscale Interface."""
+    try:
+        settings = _load_cli_settings()
+        configs = load_config_objects(settings)
+        obj = configs.require("Interface", iface_name)
+        config = configs.resolve_object(obj, InterfaceConfig)
+        if config.type != "tailscale":
+            raise ValueError(f"Interface/{iface_name} is not type tailscale")
+        socket_path = tailscale_socket_path(settings, iface_name)
+        result = subprocess.run(
+            ["tailscale", f"--socket={socket_path}", *tailscale_args],
+            check=False,
+        )
+    except (KeyError, OSError, RuntimeError, ValueError) as exc:
+        error_console.print(f"[red]ts failed:[/red] {exc}")
+        raise SystemExit(1) from exc
+    raise SystemExit(result.returncode)
 
 
 @app.command

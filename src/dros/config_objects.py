@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Any, Literal, TypeVar
 
 import yaml
-from pydantic import AliasChoices, BaseModel, ConfigDict, Field
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_validator
 
 from dros.kind_aliases import resolve_kind_alias
 from dros.settings import DrosSettings
@@ -35,6 +35,10 @@ class SystemMirrorConfig(BaseModel):
         alias="dockerAptMirror",
     )
     docker_registry_mirror: str = Field("", alias="dockerRegistryMirror")
+    tailscale_apt_mirror: str = Field(
+        "https://mirrors.ustc.edu.cn/tailscale",
+        alias="tailscaleAptMirror",
+    )
 
 
 class DevGroupConfig(BaseModel):
@@ -490,7 +494,7 @@ class DockerAppConfig(BaseModel):
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
     enabled: bool = True
-    app: Literal["vlmcsd", "nginx", "ddns-go", "unifi", "certimate"]
+    app: Literal["vlmcsd", "nginx", "ddns-go", "unifi", "certimate", "headscale"]
     variant: Literal["openresty", "nginx"] | None = None
     image: str | None = None
     image_name: str | None = Field(
@@ -519,6 +523,22 @@ class DockerAppConfig(BaseModel):
     additional_domains: list[str] = Field(
         default_factory=list,
         validation_alias=AliasChoices("additional_domains", "additionalDomains"),
+    )
+    server_url: str | None = Field(
+        None,
+        validation_alias=AliasChoices("server_url", "serverUrl"),
+    )
+    listen_addr: str = Field(
+        "0.0.0.0:8443",
+        validation_alias=AliasChoices("listen_addr", "listenAddr"),
+    )
+    metrics_listen_addr: str = Field(
+        "127.0.0.1:9090",
+        validation_alias=AliasChoices("metrics_listen_addr", "metricsListenAddr"),
+    )
+    raw_config: str | None = Field(
+        None,
+        validation_alias=AliasChoices("raw_config", "rawConfig"),
     )
 
 
@@ -631,6 +651,7 @@ class InterfaceConfig(BaseModel):
         "pppoe",
         "wireguard",
         "openvpn",
+        "tailscale",
     ]
     auto: bool = True
     allow_hotplug: bool = Field(
@@ -744,6 +765,75 @@ class InterfaceConfig(BaseModel):
     )
     up: str | None = None
     listen: dict[str, Any] | list[dict[str, Any]] | None = None
+    login_server: str | None = Field(
+        None,
+        validation_alias=AliasChoices("login_server", "loginServer"),
+    )
+    hostname: str | None = None
+    accept_routes: bool = Field(
+        False,
+        validation_alias=AliasChoices("accept_routes", "acceptRoutes"),
+    )
+    accept_dns: bool = Field(
+        False,
+        validation_alias=AliasChoices("accept_dns", "acceptDns"),
+    )
+    netfilter_mode: Literal["off", "nodivert", "on"] = Field(
+        "off",
+        validation_alias=AliasChoices("netfilter_mode", "netfilterMode"),
+    )
+    advertise_routes: list[str] = Field(
+        default_factory=list,
+        validation_alias=AliasChoices("advertise_routes", "advertiseRoutes"),
+    )
+    advertise_tags: list[str] = Field(
+        default_factory=list,
+        validation_alias=AliasChoices("advertise_tags", "advertiseTags"),
+    )
+    ssh: bool = False
+    shields_up: bool = Field(
+        False,
+        validation_alias=AliasChoices("shields_up", "shieldsUp"),
+    )
+    snat_subnet_routes: bool | None = Field(
+        None,
+        validation_alias=AliasChoices("snat_subnet_routes", "snatSubnetRoutes"),
+    )
+    stateful_filtering: bool | None = Field(
+        None,
+        validation_alias=AliasChoices("stateful_filtering", "statefulFiltering"),
+    )
+    operator: str | None = None
+    state_dir: str | None = Field(
+        None,
+        validation_alias=AliasChoices("state_dir", "stateDir"),
+    )
+    port: int | None = None
+    no_logs_no_support: bool = Field(
+        False,
+        validation_alias=AliasChoices("no_logs_no_support", "noLogsNoSupport"),
+    )
+    extra_daemon_args: list[str] = Field(
+        default_factory=list,
+        validation_alias=AliasChoices("extra_daemon_args", "extraDaemonArgs"),
+    )
+    extra_up_args: list[str] = Field(
+        default_factory=list,
+        validation_alias=AliasChoices("extra_up_args", "extraUpArgs"),
+    )
+    up_timeout: str = Field(
+        "10s",
+        validation_alias=AliasChoices("up_timeout", "upTimeout"),
+    )
+
+    @field_validator("netfilter_mode", mode="before")
+    @classmethod
+    def _normalize_netfilter_mode(cls, value: object) -> object:
+        if value is False:
+            return "off"
+        if value is True:
+            return "on"
+        return value
 
 
 @dataclass(frozen=True)

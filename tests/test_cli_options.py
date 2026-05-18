@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import subprocess
 from pathlib import Path
 
 from dros.cli import main as cli_main
@@ -292,6 +293,64 @@ paths:
     assert "update validation failed:" in output
     assert "Interface/a: bad a" in output
     assert "Interface/b: bad b" in output
+
+
+def test_ts_command_wraps_tailscale_with_interface_socket(monkeypatch, tmp_path: Path) -> None:
+    settings_file = tmp_path / "settings.yaml"
+    configs = tmp_path / "configs"
+    run = tmp_path / "run"
+    configs.mkdir()
+    (configs / "tailscale.yaml").write_text(
+        """
+kind: Interface
+metadata:
+  name: ts-office
+spec:
+  type: tailscale
+""".lstrip(),
+        encoding="utf-8",
+    )
+    settings_file.write_text(
+        f"""
+sysRoot: {tmp_path / "sysroot"}
+paths:
+  configs: {configs}
+  logs: {tmp_path / "logs"}
+  run: {run}
+""".lstrip(),
+        encoding="utf-8",
+    )
+    calls: list[list[str]] = []
+
+    def fake_run(command: list[str], *, check: bool = False) -> subprocess.CompletedProcess[str]:
+        calls.append(command)
+        return subprocess.CompletedProcess(command, 0)
+
+    monkeypatch.setattr(cli_main.subprocess, "run", fake_run)
+
+    assert (
+        cli_main.main(
+            [
+                "--settings",
+                str(settings_file),
+                "ts",
+                "ts-office",
+                "up",
+                "--auth-key=secret",
+                "--advertise-tags=tag:gateway",
+            ]
+        )
+        == 0
+    )
+    assert calls == [
+        [
+            "tailscale",
+            f"--socket={run / 'tailscale/ts-office.sock'}",
+            "up",
+            "--auth-key=secret",
+            "--advertise-tags=tag:gateway",
+        ]
+    ]
 
 
 def test_hook_command_only_enqueues_event_and_logs_invocation(monkeypatch, tmp_path: Path) -> None:

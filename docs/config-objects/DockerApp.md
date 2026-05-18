@@ -24,6 +24,7 @@
 - `ddns-go`
 - `unifi`
 - `certimate`
+- `headscale`
 
 `collectd` 和 `collectd-web` 暂不实现。
 
@@ -40,7 +41,7 @@ DROS 没有内置 `DockerApp` YAML。
 - `metadata.name`：对象名，同时作为目录名、container name 和默认 DNS 名称来源。只允许字母、数字、点、下划线和短横线。
 - `metadata.disabled`：为 `true` 时对象会被忽略。当前不会自动删除已经生成的 compose project。
 - `spec.enabled`：是否启用。默认 `true`。为 `false` 时 `gw update docker` 会跳过该 app。
-- `spec.app`：必填。可选 `vlmcsd`、`nginx`、`ddns-go`、`unifi`、`certimate`。
+- `spec.app`：必填。可选 `vlmcsd`、`nginx`、`ddns-go`、`unifi`、`certimate`、`headscale`。
 - `spec.dnsNames`：Docker DNS 名称列表。默认 `[]`。设置后会替换默认 `<metadata.name>.<DockerDNS.spec.suffix>`。
 - `spec.additionalDomains`：额外完整域名列表。默认 `[]`。会追加到 Docker DNS 记录中，不自动追加 suffix。
 
@@ -255,6 +256,50 @@ metadata:
   name: certimate
 spec:
   app: certimate
+```
+
+## `app: headscale`
+
+### 固定配置
+
+- 默认镜像：`docker.io/headscale/headscale:v0.28.0-beta.2`
+- 默认网络：`default`
+- restart policy：`unless-stopped`
+- 固定 command：`serve`
+- 固定 `read_only: true`
+- 固定 `tmpfs`：`/var/run/headscale`
+- 固定 healthcheck：`headscale health`
+- 固定挂载：
+  - `{paths.containers}/<name>/generated/inline/config.yaml:/etc/headscale/config.yaml:ro`
+  - `{paths.containers}/<name>/data:/var/lib/headscale:rw`
+
+### 允许额外配置
+
+- `enabled`：默认 `true`
+- `serverUrl`：Headscale 对外 URL。生成配置时必填，支持非 443 端口。
+- `listenAddr`：Headscale 监听地址。默认 `0.0.0.0:8443`。
+- `metricsListenAddr`：metrics 监听地址。默认 `127.0.0.1:9090`。
+- `rawConfig`：完整 Headscale `config.yaml` 内容。设置后 DROS 不再生成默认配置。
+- `network`：默认按 `default` 运行，便于放在 Nginx 等反向代理后面。显式设置其他 Docker
+  network 时，DROS 会使用该值。
+- `image` / `imageName` / `imageTag`：默认使用固定镜像。
+- `environment`：默认 `{}`，会叠加到内置 `TZ=Asia/Shanghai` 上。
+- `mounts`：默认 `[]`。
+- `dnsNames`：默认 `[]`。
+- `additionalDomains`：默认 `[]`。
+
+### 示例
+
+```yaml
+apiVersion: dros/v1alpha1
+kind: DockerApp
+metadata:
+  name: headscale
+spec:
+  app: headscale
+  serverUrl: https://hs.example.net:8443
+  listenAddr: 0.0.0.0:8443
+  metricsListenAddr: 127.0.0.1:9090
 ```
 
 ## 当前实现中需要重点审查的点

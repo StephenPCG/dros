@@ -196,6 +196,85 @@ spec:
     assert "/opt/gateway/containers/certimate/data:/app/pb_data:rw" in certimate_service["volumes"]
 
 
+def test_update_headscale_docker_app_renders_configured_control_plane(
+    tmp_path: Path,
+) -> None:
+    settings = _settings(tmp_path)
+    settings.paths.configs.mkdir(parents=True)
+    (settings.paths.configs / "headscale.yaml").write_text(
+        """
+kind: DockerApp
+metadata:
+  name: headscale
+spec:
+  app: headscale
+  serverUrl: https://hs.example.net:8443
+  listenAddr: 0.0.0.0:8443
+  metricsListenAddr: 127.0.0.1:9090
+""".lstrip(),
+        encoding="utf-8",
+    )
+
+    run_update(settings, target="docker-app/headscale", console=_console(StringIO()))
+
+    root = settings.sys_root / "opt/gateway/containers/headscale"
+    config = root / "generated/inline/config.yaml"
+    assert "server_url: https://hs.example.net:8443" in config.read_text(encoding="utf-8")
+    assert "listen_addr: 0.0.0.0:8443" in config.read_text(encoding="utf-8")
+    compose = _compose(settings, "headscale")
+    service = compose["services"]["app"]
+    assert service["image"] == "docker.io/headscale/headscale:v0.28.0-beta.2"
+    assert service["network_mode"] == "bridge"
+    assert service["command"] == "serve"
+    assert service["read_only"] is True
+    assert service["tmpfs"] == ["/var/run/headscale"]
+    assert service["healthcheck"] == {"test": ["CMD", "headscale", "health"]}
+    assert "/opt/gateway/containers/headscale/generated/inline/config.yaml:/etc/headscale/config.yaml:ro" in service["volumes"]
+    assert "/opt/gateway/containers/headscale/data:/var/lib/headscale:rw" in service["volumes"]
+
+
+def test_update_headscale_docker_app_requires_server_url_without_raw_config(
+    tmp_path: Path,
+) -> None:
+    settings = _settings(tmp_path)
+    settings.paths.configs.mkdir(parents=True)
+    (settings.paths.configs / "headscale.yaml").write_text(
+        """
+kind: DockerApp
+metadata:
+  name: headscale
+spec:
+  app: headscale
+""".lstrip(),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(UpdateValidationError, match="serverUrl"):
+        run_update(settings, target="docker-app/headscale", console=_console(StringIO()))
+
+
+def test_update_docker_app_rejects_headscale_only_listen_fields(
+    tmp_path: Path,
+) -> None:
+    settings = _settings(tmp_path)
+    settings.paths.configs.mkdir(parents=True)
+    (settings.paths.configs / "app.yaml").write_text(
+        """
+kind: DockerApp
+metadata:
+  name: web
+spec:
+  app: vlmcsd
+  listenAddr: 0.0.0.0:8443
+  metricsListenAddr: 127.0.0.1:9090
+""".lstrip(),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(UpdateValidationError, match="listenAddr.*headscale"):
+        run_update(settings, target="docker-app/web", console=_console(StringIO()))
+
+
 def test_update_docker_app_rejects_collectd_templates(tmp_path: Path) -> None:
     settings = _settings(tmp_path)
     settings.paths.configs.mkdir(parents=True)
