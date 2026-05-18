@@ -1257,6 +1257,7 @@ function OpenVPNPage() {
   const [createOpen, setCreateOpen] = useState(false)
   const [createForm, setCreateForm] = useState<OpenVPNCreateForm>(emptyOpenVPNCreateForm())
   const [certProfile, setCertProfile] = useState<OpenVPNProfile | null>(null)
+  const [downloadProfileTarget, setDownloadProfileTarget] = useState<OpenVPNProfile | null>(null)
   const [certs, setCerts] = useState<OpenVPNCert[]>([])
   const [loadingCerts, setLoadingCerts] = useState(false)
 
@@ -1410,8 +1411,27 @@ function OpenVPNPage() {
     if (!selectedInstance) {
       return
     }
+    if (profile.kind === "client") {
+      if (profile.outputFiles.length === 0) {
+        setError("该 client 暂无可下载配置文件")
+        return
+      }
+      setError("")
+      setDownloadProfileTarget(profile)
+      return
+    }
+    setError("")
+    downloadProfileFile(profile)
+  }
+
+  function downloadProfileFile(profile: OpenVPNProfile, outputFile?: string) {
+    if (!selectedInstance) {
+      return
+    }
+    const params = outputFile ? `?${new URLSearchParams({ file: fileName(outputFile) }).toString()}` : ""
+    setDownloadProfileTarget(null)
     window.location.assign(
-      `/api/openvpn/instances/${encodeURIComponent(selectedInstance)}/profiles/${profile.kind}/${encodeURIComponent(profile.name)}/download`,
+      `/api/openvpn/instances/${encodeURIComponent(selectedInstance)}/profiles/${profile.kind}/${encodeURIComponent(profile.name)}/download${params}`,
     )
   }
 
@@ -1647,6 +1667,27 @@ function OpenVPNPage() {
           ) : (
             <div className="py-8 text-sm text-muted-foreground">暂无证书</div>
           )}
+        </Modal>
+      ) : null}
+
+      {downloadProfileTarget ? (
+        <Modal title={`${downloadProfileTarget.name} 配置文件`} onClose={() => setDownloadProfileTarget(null)}>
+          <div className="divide-y rounded-md border">
+            {downloadProfileTarget.outputFiles.map((outputFile) => (
+              <button
+                key={outputFile}
+                className="flex w-full items-center justify-between gap-3 px-3 py-3 text-left transition-colors hover:bg-muted"
+                type="button"
+                onClick={() => downloadProfileFile(downloadProfileTarget, outputFile)}
+              >
+                <span className="min-w-0">
+                  <span className="block truncate font-mono text-sm">{fileName(outputFile)}</span>
+                  <span className="mt-1 block truncate text-xs text-muted-foreground">{outputFile}</span>
+                </span>
+                <Download className="size-4 shrink-0 text-muted-foreground" />
+              </button>
+            ))}
+          </div>
         </Modal>
       ) : null}
     </div>
