@@ -24,6 +24,8 @@ any selected object is invalid.
 - `network.interfaces` owns `DevGroup` and `Interface` objects, ifupdown
   fragments, PPP hook dispatch, Tailscale service defaults, and runtime
   interface properties.
+- `network.xfrm` owns `XfrmTransport` objects and systemd units for
+  `activation: system` transports.
 - `network.ipv6pd` owns `IPv6PD` objects, wide-dhcpv6 configuration, radvd
   configuration, IPv6 refresh hooks, and the IPv6PD nftables snippet.
 - `network.routing` owns `FwMark`, `Gateway`, `RouteTable`, and
@@ -214,7 +216,8 @@ system default stays in place until a `Firewall` object is applied.
 `/etc/nftables.conf`, `/etc/dros/nftables.d/10-firewall.nft`, interface-owned
 listen snippets under `/etc/dros/nftables.d/30-interface-*.nft`, and
 `/etc/iproute2/rt_tables.d/dros.conf`, per-interface Tailscale systemd units
-under `/etc/systemd/system/dros-tailscaled-*.service`, plus dnsmasq include
+under `/etc/systemd/system/dros-tailscaled-*.service`, XFRM system activation
+units under `/etc/systemd/system/dros-xfrm-*.service`, plus dnsmasq include
 files under `/etc/dnsmasq.d/dros-*.conf`. Route updates are rendered to
 `{paths.run}/tmp/update-route.sh` first, then applied from that script; each
 selected route table is written through a separate `ip -batch` block.

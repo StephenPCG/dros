@@ -6,9 +6,13 @@ from pathlib import Path
 import pytest
 from rich.console import Console
 
-from dros.config_objects import InterfaceConfig
+from dros.config_objects import InterfaceConfig, XfrmTransportConfig, load_config_objects
 from dros.events import process_event
+from dros.executor import SystemExecutor
+from dros.plugins import create_default_registry
+from dros.plugins.base import UpdateContext
 from dros.plugins.network_interfaces import _reload_ifupdown_interface
+from dros.plugins.network_xfrm import start_xfrm
 from dros.settings import DrosPaths, DrosSettings
 from dros.update import UpdateValidationError, run_config_check, run_update
 
@@ -651,6 +655,28 @@ spec:
   remotePublicIp: 203.0.113.1
   ttl: 255
 ---
+apiVersion: dros/v1alpha1
+kind: XfrmTransport
+metadata:
+  name: office
+spec:
+  localParty: partyA
+  selector:
+    proto: udp
+  partyA:
+    publicIp: 198.51.100.1
+  partyB:
+    publicIp: 203.0.113.1
+  spi:
+    partyAToPartyB: "0x100"
+    partyBToPartyA: "0x101"
+  reqid:
+    partyAToPartyB: 100
+    partyBToPartyA: 101
+  keys:
+    partyAToPartyB: "0x00112233445566778899aabbccddeeff00112233"
+    partyBToPartyA: "0xffeeddccbbaa99887766554433221100ffeeddcc"
+---
 kind: Interface
 metadata:
   name: pppoe-wan
@@ -668,6 +694,7 @@ spec:
   address: 10.20.0.1/24
   privateKey: private-key
   listenPort: 51820
+  xfrmTransport: office
   peers:
     - publicKey: peer-key
       allowedIPs:
@@ -703,8 +730,10 @@ spec:
         encoding="utf-8"
     )
     assert "iface wg0 inet static\n" in wg_iface
+    assert "pre-up gw start xfrm/office --verbose 0\n" in wg_iface
     assert "pre-up ip link add dev $IFACE type wireguard\n" in wg_iface
     assert "pre-up wg setconf $IFACE /etc/wireguard/wg0.conf\n" in wg_iface
+    assert "post-down gw stop xfrm/office --verbose 0 || true\n" in wg_iface
     assert "PrivateKey = private-key\n" in wg_conf
     assert "ListenPort = 51820\n" in wg_conf
     assert "PublicKey = peer-key\n" in wg_conf
@@ -940,7 +969,9 @@ spec:
     assert "replacedefaultroute" not in lines
 
 
-def test_update_xfrm_transport_renders_transport_mode_commands(tmp_path: Path) -> None:
+def test_update_xfrm_transport_manual_activation_does_not_start_runtime(
+    tmp_path: Path,
+) -> None:
     settings = _settings(tmp_path)
     settings.paths.configs.mkdir(parents=True)
     (settings.paths.configs / "xfrm.yaml").write_text(
@@ -972,10 +1003,186 @@ spec:
     result = run_update(settings, target="xfrm/office", console=_console(StringIO()))
 
     commands = [" ".join(action.command or []) for action in result.actions]
-    assert any("ip xfrm state add src 10.0.0.1 dst 203.0.113.1" in command for command in commands)
-    assert any("proto esp spi 0x00000100 reqid 0x00000064" in command for command in commands)
-    assert any("mode transport aead rfc4106(gcm(aes))" in command for command in commands)
-    assert any("ip xfrm policy add dir out src 10.0.0.1/32 dst 203.0.113.1/32 proto gre" in command for command in commands)
+    assert not any("ip xfrm state add" in command for command in commands)
+    assert not any("ip xfrm policy add" in command for command in commands)
+
+
+def test_update_xfrm_transport_system_activation_writes_systemd_service(
+    tmp_path: Path,
+) -> None:
+    settings = _settings(tmp_path)
+    settings.paths.configs.mkdir(parents=True)
+    (settings.paths.configs / "xfrm.yaml").write_text(
+        """
+apiVersion: dros/v1alpha1
+kind: XfrmTransport
+metadata:
+  name: office
+spec:
+  activation: system
+  localParty: partyA
+  partyA:
+    publicIp: 198.51.100.1
+    privateIp: 10.0.0.1
+  partyB:
+    publicIp: 203.0.113.1
+  spi:
+    partyAToPartyB: "0x100"
+    partyBToPartyA: "0x101"
+  reqid:
+    partyAToPartyB: 100
+    partyBToPartyA: 101
+  keys:
+    partyAToPartyB: "0x00112233445566778899aabbccddeeff00112233"
+    partyBToPartyA: "0xffeeddccbbaa99887766554433221100ffeeddcc"
+""".lstrip(),
+        encoding="utf-8",
+    )
+
+    result = run_update(settings, target="xfrm/office", console=_console(StringIO()))
+
+    service = (
+        settings.sys_root / "etc/systemd/system/dros-xfrm-office.service"
+    ).read_text(encoding="utf-8")
+    commands = [" ".join(action.command or []) for action in result.actions]
+    assert "Description=DROS XFRM transport office" in service
+    assert "Type=oneshot" in service
+    assert "RemainAfterExit=yes" in service
+    assert "ExecStart=/usr/local/bin/gw start xfrm/office --verbose 0" in service
+    assert "ExecStop=/usr/local/bin/gw stop xfrm/office --verbose 0" in service
+    assert "systemctl daemon-reload" in commands
+    assert "systemctl enable --now dros-xfrm-office.service" in commands
+    assert "systemctl restart dros-xfrm-office.service" in commands
+    assert not any("ip xfrm state add" in command for command in commands)
+    assert not any("ip xfrm policy add" in command for command in commands)
+
+
+def test_update_xfrm_transport_supports_udp_selector(tmp_path: Path) -> None:
+    settings = _settings(tmp_path)
+    settings.paths.configs.mkdir(parents=True)
+    (settings.paths.configs / "xfrm.yaml").write_text(
+        """
+apiVersion: dros/v1alpha1
+kind: XfrmTransport
+metadata:
+  name: office
+spec:
+  localParty: partyA
+  selector:
+    proto: udp
+  partyA:
+    publicIp: 198.51.100.1
+    privateIp: 10.0.0.1
+  partyB:
+    publicIp: 203.0.113.1
+  spi:
+    partyAToPartyB: "0x100"
+    partyBToPartyA: "0x101"
+  reqid:
+    partyAToPartyB: 100
+    partyBToPartyA: 101
+  keys:
+    partyAToPartyB: "0x00112233445566778899aabbccddeeff00112233"
+    partyBToPartyA: "0xffeeddccbbaa99887766554433221100ffeeddcc"
+""".lstrip(),
+        encoding="utf-8",
+    )
+
+    result = run_update(settings, target="xfrm/office", console=_console(StringIO()))
+
+    commands = [" ".join(action.command or []) for action in result.actions]
+    assert not any("sel src 10.0.0.1/32 dst 203.0.113.1/32 proto udp" in command for command in commands)
+    assert not any("ip xfrm policy add dir out src 10.0.0.1/32 dst 203.0.113.1/32 proto udp" in command for command in commands)
+
+
+def test_start_xfrm_transport_supports_udp_selector(tmp_path: Path) -> None:
+    settings = _settings(tmp_path)
+    settings.paths.configs.mkdir(parents=True)
+    (settings.paths.configs / "xfrm.yaml").write_text(
+        """
+apiVersion: dros/v1alpha1
+kind: XfrmTransport
+metadata:
+  name: office
+spec:
+  localParty: partyA
+  selector:
+    proto: udp
+  partyA:
+    publicIp: 198.51.100.1
+    privateIp: 10.0.0.1
+  partyB:
+    publicIp: 203.0.113.1
+  spi:
+    partyAToPartyB: "0x100"
+    partyBToPartyA: "0x101"
+  reqid:
+    partyAToPartyB: 100
+    partyBToPartyA: 101
+  keys:
+    partyAToPartyB: "0x00112233445566778899aabbccddeeff00112233"
+    partyBToPartyA: "0xffeeddccbbaa99887766554433221100ffeeddcc"
+""".lstrip(),
+        encoding="utf-8",
+    )
+    configs = load_config_objects(settings)
+    obj = configs.require("XfrmTransport", "office")
+    config = configs.resolve_object(obj, XfrmTransportConfig)
+    registry = create_default_registry()
+    executor = SystemExecutor(settings, console=_console(StringIO()))
+    context = UpdateContext(settings=settings, configs=configs, executor=executor, registry=registry)
+
+    start_xfrm(context, "office", config)
+
+    commands = [" ".join(action.command or []) for action in executor.actions]
+    assert any("sel src 10.0.0.1/32 dst 203.0.113.1/32 proto udp" in command for command in commands)
+    assert any("ip xfrm policy add dir out src 10.0.0.1/32 dst 203.0.113.1/32 proto udp" in command for command in commands)
+
+
+def test_interface_rejects_system_activated_xfrm_transport(tmp_path: Path) -> None:
+    settings = _settings(tmp_path)
+    settings.paths.configs.mkdir(parents=True)
+    (settings.paths.configs / "network.yaml").write_text(
+        """
+apiVersion: dros/v1alpha1
+kind: XfrmTransport
+metadata:
+  name: office
+spec:
+  activation: system
+  localParty: partyA
+  partyA:
+    publicIp: 198.51.100.1
+  partyB:
+    publicIp: 203.0.113.1
+  spi:
+    partyAToPartyB: "0x100"
+    partyBToPartyA: "0x101"
+  reqid:
+    partyAToPartyB: 100
+    partyBToPartyA: 101
+  keys:
+    partyAToPartyB: "0x00112233445566778899aabbccddeeff00112233"
+    partyBToPartyA: "0xffeeddccbbaa99887766554433221100ffeeddcc"
+---
+apiVersion: dros/v1alpha1
+kind: Interface
+metadata:
+  name: gre-office
+spec:
+  type: gre
+  address: 10.10.10.1/30
+  localPublicIp: 198.51.100.1
+  remotePublicIp: 203.0.113.1
+  xfrmTransport: office
+""".lstrip(),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(UpdateValidationError) as exc_info:
+        run_update(settings, target="iface/gre-office", console=_console(StringIO()))
+
+    assert "XfrmTransport/office uses activation system" in "\n".join(exc_info.value.errors)
 
 
 def test_update_wireguard_expands_allowed_ips_and_writes_wgsd_cron(tmp_path: Path) -> None:

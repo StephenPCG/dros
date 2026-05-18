@@ -37,6 +37,8 @@ DROS 会在更新时迁移旧的 `/etc/network/interfaces.d/dros-<name>.cfg` 文
 `/etc/wireguard/<name>.conf`，配置 `wgsdClient` 时还会生成
 `/etc/cron.d/dros-wgsd-client-<name>`。`openvpn` 还会生成
 `/etc/dros/openvpn/<name>.ovpn`，以及必要时生成 `/etc/dros/openvpn/<name>.up`。
+`gre` 和 `wireguard` 可以引用 `XfrmTransport`，DROS 会在对应 ifupdown fragment 中插入
+`gw start xfrm/<name>` / `gw stop xfrm/<name>` hook。
 
 `docker` 不生成 ifupdown 配置。它由 Docker 管理生命周期，DROS 只负责创建自定义 Docker
 bridge network，并在运行时应用 `devGroup` 和 `extraAddresses`。
@@ -458,8 +460,9 @@ docker network create --driver bridge --subnet <subnet> --opt com.docker.network
 
 ### `spec.xfrmTransport`
 
-仅 `type: gre` 使用。引用 `XfrmTransport` 对象。DROS 会在 GRE ifupdown fragment 中渲染
-`gw start xfrm/<name> --verbose 0` 和对应的 `gw stop`。
+仅 `type: gre` 和 `type: wireguard` 使用。引用 `activation: manual` 的 `XfrmTransport`
+对象。DROS 会在 ifupdown fragment 中渲染 `gw start xfrm/<name> --verbose 0` 和对应的
+`gw stop`。`activation: system` 的 XfrmTransport 不能被 Interface 引用。
 
 默认值：无。
 

@@ -565,7 +565,7 @@ class DockerDNSConfig(BaseModel):
 class XfrmTransportSelectorConfig(BaseModel):
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
-    proto: Literal["gre"] = "gre"
+    proto: Literal["gre", "udp"] = "gre"
 
 
 class XfrmTransportPartyConfig(BaseModel):

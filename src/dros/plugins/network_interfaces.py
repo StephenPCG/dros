@@ -8,7 +8,12 @@ from typing import Any
 
 from pydantic import ValidationError
 
-from dros.config_objects import ConfigObject, DevGroupConfig, InterfaceConfig
+from dros.config_objects import (
+    ConfigObject,
+    DevGroupConfig,
+    InterfaceConfig,
+    XfrmTransportConfig,
+)
 from dros.ip_lists import IpListStore, load_ip_lists
 from dros.plugins.base import BootstrapContext, DrosPlugin, UpdateContext
 from dros.settings import DrosSettings
@@ -91,7 +96,7 @@ def validate(context: UpdateContext, objects: list[ConfigObject]) -> list[str]:
     errors: list[str] = []
     devgroups = _devgroups(context, errors)
     interface_names = {obj.name for obj in context.configs.by_kind("Interface")}
-    xfrm_names = {obj.name for obj in context.configs.by_kind("XfrmTransport")}
+    xfrm_activations = _xfrm_activations(context, errors)
     selected_interface_names: set[str] = set()
 
     for obj in objects:
@@ -104,7 +109,7 @@ def validate(context: UpdateContext, objects: list[ConfigObject]) -> list[str]:
         config = _validate_model(context, obj, InterfaceConfig, errors)
         if config is None:
             continue
-        errors.extend(_validate_interface(obj, config, devgroups, interface_names, xfrm_names))
+        errors.extend(_validate_interface(obj, config, devgroups, interface_names, xfrm_activations))
     if selected_interface_names:
         errors.extend(_validate_interface_dependency_graph(context, selected_interface_names))
     return errors
@@ -322,23 +327,34 @@ def _devgroups(context: UpdateContext | BootstrapContext, errors: list[str]) -> 
     return groups
 
 
+def _xfrm_activations(context: UpdateContext, errors: list[str]) -> dict[str, str]:
+    activations: dict[str, str] = {}
+    for obj in context.configs.by_kind("XfrmTransport"):
+        config = _validate_model(context, obj, XfrmTransportConfig, errors)
+        if config is None:
+            continue
+        activations[obj.name] = config.activation
+    return activations
+
+
 def _validate_interface(
     obj: ConfigObject,
     config: InterfaceConfig,
     devgroups: dict[str, int],
     interface_names: set[str],
-    xfrm_names: set[str],
+    xfrm_activations: dict[str, str],
 ) -> list[str]:
     errors: list[str] = []
     if config.devgroup and config.devgroup not in devgroups:
         errors.append(f"Interface/{obj.name}: references undefined DevGroup/{config.devgroup}")
     iface_type = _interface_type(config)
+    _validate_xfrm_reference(obj, config, iface_type, xfrm_activations, errors)
     if iface_type == "vlan":
         _validate_vlan(obj, config, interface_names, errors)
     elif iface_type == "docker":
         _validate_docker(obj, config, errors)
     elif iface_type == "gre":
-        _validate_gre(obj, config, xfrm_names, errors)
+        _validate_gre(obj, config, errors)
     elif iface_type == "pppoe":
         _validate_pppoe(obj, config, errors)
     elif iface_type == "wireguard":
@@ -378,7 +394,6 @@ def _validate_docker(obj: ConfigObject, config: InterfaceConfig, errors: list[st
 def _validate_gre(
     obj: ConfigObject,
     config: InterfaceConfig,
-    xfrm_names: set[str],
     errors: list[str],
 ) -> None:
     if not (config.address or config.local_vip):
@@ -387,12 +402,33 @@ def _validate_gre(
         errors.append(f"Interface/{obj.name}: type gre requires spec.localPublicIp")
     if not config.remote_public_ip:
         errors.append(f"Interface/{obj.name}: type gre requires spec.remotePublicIp")
-    if config.xfrm_transport and config.xfrm_transport not in xfrm_names:
+    if not 1 <= config.ttl <= 255:
+        errors.append(f"Interface/{obj.name}: spec.ttl must be between 1 and 255")
+
+
+def _validate_xfrm_reference(
+    obj: ConfigObject,
+    config: InterfaceConfig,
+    iface_type: str,
+    xfrm_activations: dict[str, str],
+    errors: list[str],
+) -> None:
+    if not config.xfrm_transport:
+        return
+    if iface_type not in {"gre", "wireguard"}:
+        errors.append(
+            f"Interface/{obj.name}: spec.xfrmTransport is only supported for gre and wireguard"
+        )
+        return
+    activation = xfrm_activations.get(config.xfrm_transport)
+    if activation is None:
         errors.append(
             f"Interface/{obj.name}: references undefined XfrmTransport/{config.xfrm_transport}"
         )
-    if not 1 <= config.ttl <= 255:
-        errors.append(f"Interface/{obj.name}: spec.ttl must be between 1 and 255")
+    elif activation == "system":
+        errors.append(
+            f"Interface/{obj.name}: XfrmTransport/{config.xfrm_transport} uses activation system"
+        )
 
 
 def _validate_pppoe(obj: ConfigObject, config: InterfaceConfig, errors: list[str]) -> None:
@@ -515,9 +551,9 @@ def _validate_single_line(
 def _validate_model(
     context: UpdateContext | BootstrapContext,
     obj: ConfigObject,
-    model_type: type[DevGroupConfig] | type[InterfaceConfig],
+    model_type: type[DevGroupConfig] | type[InterfaceConfig] | type[XfrmTransportConfig],
     errors: list[str],
-) -> DevGroupConfig | InterfaceConfig | None:
+) -> DevGroupConfig | InterfaceConfig | XfrmTransportConfig | None:
     try:
         return context.configs.resolve_object(obj, model_type)
     except ValidationError as exc:
@@ -928,6 +964,9 @@ def _ppp_option_value(value: object) -> str:
 
 def _render_wireguard_iface(name: str, config: InterfaceConfig) -> list[str]:
     lines = _address_family(name, config)
+    if config.xfrm_transport:
+        selector = shlex.quote(f"xfrm/{config.xfrm_transport}")
+        lines.append(f"  pre-up gw start {selector} --verbose 0")
     lines.append("  pre-up ip link add dev $IFACE type wireguard")
     if config.private_key_file and not config.private_key:
         lines.append(
@@ -939,6 +978,9 @@ def _render_wireguard_iface(name: str, config: InterfaceConfig) -> list[str]:
             "  post-down ip link del dev $IFACE || true",
         ]
     )
+    if config.xfrm_transport:
+        selector = shlex.quote(f"xfrm/{config.xfrm_transport}")
+        lines.append(f"  post-down gw stop {selector} --verbose 0 || true")
     return lines
 
 
