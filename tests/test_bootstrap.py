@@ -132,6 +132,44 @@ spec:
     ).read_text(encoding="utf-8")
 
 
+def test_bootstrap_removes_deb822_debian_sources_before_installing_packages(
+    tmp_path: Path,
+) -> None:
+    settings = _settings(tmp_path)
+    settings.paths.configs.mkdir(parents=True)
+    debian_sources = settings.sys_root / "etc/apt/sources.list.d/debian.sources"
+    debian_sources.parent.mkdir(parents=True)
+    debian_sources.write_text(
+        """
+Types: deb
+URIs: https://deb.debian.org/debian
+Suites: trixie trixie-updates
+Components: main
+""".lstrip(),
+        encoding="utf-8",
+    )
+    installed_packages = create_default_registry().owned_packages() - {"curl"}
+
+    result = run_bootstrap(
+        settings,
+        console=_console(StringIO()),
+        installed_packages=installed_packages,
+    )
+
+    assert not debian_sources.exists()
+    delete_index = next(
+        index
+        for index, action in enumerate(result.actions)
+        if action.path == "/etc/apt/sources.list.d/debian.sources"
+    )
+    apt_update_index = next(
+        index
+        for index, action in enumerate(result.actions)
+        if action.command == ["apt-get", "update"]
+    )
+    assert delete_index < apt_update_index
+
+
 def test_bootstrap_file_writes_are_idempotent(tmp_path: Path) -> None:
     settings = _settings(tmp_path)
     settings.paths.configs.mkdir(parents=True)

@@ -170,6 +170,7 @@ Bootstrap currently manages:
 - `/etc/cloud/cloud.cfg.d/99-dros-hostname.cfg` when cloud-init is detected
 - `/etc/sysctl.d/99-dros.conf`
 - `/etc/apt/sources.list`
+- `/etc/apt/sources.list.d/debian.sources` is removed
 - `/etc/apt/sources.list.d/docker-ce.list`
 - `/etc/apt/sources.list.d/tailscale.list`
 - `/etc/docker/daemon.json`
@@ -186,6 +187,11 @@ Bootstrap currently manages:
 - `/etc/ppp/ip-down.d/dros-hook`
 - `/usr/lib/dros/openvpn-iface`
 - `/usr/share/keyrings/tailscale-archive-keyring.gpg`
+
+DROS intentionally standardizes Debian base repositories on the one-line
+`/etc/apt/sources.list` file. Bootstrap removes
+`/etc/apt/sources.list.d/debian.sources` before running apt package installs, so
+the Debian base repositories are not declared twice.
 
 Bootstrap also disables the package-provided `tailscaled.service`. DROS-managed
 Tailscale interfaces use per-interface units named `dros-tailscaled-<name>.service`

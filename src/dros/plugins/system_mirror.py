@@ -9,6 +9,7 @@ PACKAGES = frozenset({"ca-certificates", "curl"})
 MANAGED_FILES = frozenset(
     {
         "/etc/apt/sources.list",
+        "/etc/apt/sources.list.d/debian.sources",
         "/etc/apt/sources.list.d/docker-ce.list",
         "/etc/apt/sources.list.d/tailscale.list",
         "/usr/share/keyrings/tailscale-archive-keyring.gpg",
@@ -37,6 +38,7 @@ def bootstrap(context: BootstrapContext) -> None:
         "/etc/apt/sources.list",
         _debian_sources(mirror.apt_mirror, codename),
     )
+    context.executor.delete_file("/etc/apt/sources.list.d/debian.sources")
     context.executor.install_missing_packages(PACKAGES)
     context.executor.ensure_dir("/etc/apt/keyrings")
     if not context.executor.exists("/etc/apt/keyrings/docker.asc"):
