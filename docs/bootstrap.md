@@ -19,8 +19,8 @@ any selected object is invalid.
 
 - `system.mirror` owns Debian apt sources, the Docker CE apt source, and the
   Tailscale apt source.
-- `network.core` owns hostname, hosts, sysctl, the DROS nftables snippet
-  directory, dnsmasq, avahi, and core network packages.
+- `network.core` owns hostname, hosts, cloud-init network opt-out, sysctl, the
+  DROS nftables snippet directory, dnsmasq, avahi, and core network packages.
 - `network.interfaces` owns `DevGroup` and `Interface` objects, ifupdown
   fragments, PPP hook dispatch, Tailscale service defaults, and runtime
   interface properties.
@@ -170,6 +170,14 @@ Bootstrap currently manages:
 - `/etc/hostname`
 - `/etc/hosts`
 - `/etc/cloud/cloud.cfg.d/99-dros-hostname.cfg` when cloud-init is detected
+- `/etc/cloud/cloud.cfg.d/99-dros-network.cfg` when cloud-init is detected and
+  `SystemNetworkConfig.spec.disableCloudInitNetwork` is enabled
+- `/etc/network/interfaces.d/50-cloud-init` is removed when cloud-init network
+  management is disabled
+- `/etc/network/interfaces.d/50-cloud-init.cfg` is removed when cloud-init
+  network management is disabled
+- `/etc/netplan/50-cloud-init.yaml` is removed when cloud-init network
+  management is disabled
 - `/etc/sysctl.d/99-dros.conf`
 - `/etc/apt/sources.list`
 - `/etc/apt/sources.list.d/debian.sources` is removed
@@ -205,9 +213,16 @@ DROS intentionally standardizes Debian base repositories on the one-line
 `/etc/apt/sources.list.d/debian.sources` before running apt package installs, so
 the Debian base repositories are not declared twice.
 
-Bootstrap also disables the package-provided `tailscaled.service`. DROS-managed
-Tailscale interfaces use per-interface units named `dros-tailscaled-<name>.service`
-so one gateway can join multiple tailnets at the same time.
+Bootstrap also disables package-provided daemon services that would otherwise
+race with DROS-owned runtime units:
+
+- `tailscaled.service` is disabled because DROS-managed Tailscale interfaces use
+  per-interface units named `dros-tailscaled-<name>.service`, so one gateway can
+  join multiple tailnets at the same time.
+- `wide-dhcpv6-client.service` is disabled by default because DROS IPv6PD uses
+  `dros-ipv6-pd.service` when IPv6PD is configured. Set
+  `SystemNetworkConfig.spec.wideDhcpv6ClientService: true` to preserve the
+  package-provided service.
 
 Bootstrap intentionally does not manage `/etc/nftables.conf`. The operating
 system default stays in place until a `Firewall` object is applied.

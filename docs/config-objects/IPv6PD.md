@@ -20,7 +20,9 @@ DROS 没有内置 `IPv6PD` YAML。没有该对象时，`gw update ipv6pd` 不会
 IPv6PD 配置。
 
 `gw bootstrap` 已经通过 `network.core` 安装 `wide-dhcpv6-client` 和 `radvd`
-相关包；是否启用 IPv6PD 由这个对象决定。
+相关包；是否启用 IPv6PD 由这个对象决定。默认情况下，bootstrap 会关闭 Debian
+`wide-dhcpv6-client` 包自带的 `wide-dhcpv6-client.service`，避免它和 DROS 的
+`dros-ipv6-pd.service` 同时运行。
 
 ## 常见配置
 

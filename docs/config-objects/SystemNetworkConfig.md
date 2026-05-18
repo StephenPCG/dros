@@ -30,6 +30,8 @@ spec:
   hostname: gateway
   domain: lan
   nfConntrackMax: 524288
+  disableCloudInitNetwork: true
+  wideDhcpv6ClientService: false
 ```
 
 ## 常见配置
@@ -108,6 +110,54 @@ gateway.test.init2.me gateway
 写入 `/etc/sysctl.d/99-dros.conf` 的 `net.netfilter.nf_conntrack_max`。
 
 默认值：`524288`。
+
+### `spec.disableCloudInitNetwork`
+
+是否让 cloud-init 停止管理网络配置。
+
+设置为 `true` 时，如果系统安装了 cloud-init，`gw bootstrap` 会写入：
+
+- `/etc/cloud/cloud.cfg.d/99-dros-network.cfg`
+
+内容等价于：
+
+```yaml
+network:
+  config: disabled
+disable_network_activation: true
+```
+
+同时会删除 cloud-init 常见的已渲染网络文件，避免它们继续被 ifupdown 或
+netplan 读取：
+
+- `/etc/network/interfaces.d/50-cloud-init`
+- `/etc/network/interfaces.d/50-cloud-init.cfg`
+- `/etc/netplan/50-cloud-init.yaml`
+
+设置为 `false` 时，DROS 不写入这个 cloud-init network drop-in，也不会删除这些
+cloud-init 已渲染网络文件。若此前由 DROS 写过
+`/etc/cloud/cloud.cfg.d/99-dros-network.cfg`，再次 bootstrap 会删除它。
+
+默认值：`true`。
+
+### `spec.wideDhcpv6ClientService`
+
+是否保留 Debian `wide-dhcpv6-client` 包自带的
+`wide-dhcpv6-client.service`。
+
+设置为 `false` 时，`gw bootstrap` 会执行：
+
+```sh
+systemctl disable --now wide-dhcpv6-client.service
+```
+
+DROS 的 IPv6PD 使用自己的 `dros-ipv6-pd.service` 管理 `dhcp6c`，不依赖这个包自带
+service。没有 IPv6 需求的主机建议保持默认值。
+
+设置为 `true` 时，DROS 不处理该 service，适合需要保留系统原有 DHCPv6 客户端行为的
+特殊主机。
+
+默认值：`false`。
 
 当前 bootstrap 还会固定写入以下 sysctl：
 

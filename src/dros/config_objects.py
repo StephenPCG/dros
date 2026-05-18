@@ -24,6 +24,14 @@ class SystemNetworkConfig(BaseModel):
     hostname: str = "gateway"
     domain: str = "lan"
     nf_conntrack_max: int = Field(524288, alias="nfConntrackMax")
+    disable_cloud_init_network: bool = Field(
+        True,
+        validation_alias=AliasChoices("disable_cloud_init_network", "disableCloudInitNetwork"),
+    )
+    wide_dhcpv6_client_service: bool = Field(
+        False,
+        validation_alias=AliasChoices("wide_dhcpv6_client_service", "wideDhcpv6ClientService"),
+    )
 
 
 class SystemMirrorConfig(BaseModel):

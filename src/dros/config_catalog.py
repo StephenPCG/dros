@@ -22,6 +22,8 @@ spec:
   hostname: gateway
   domain: lan
   nfConntrackMax: 524288
+  disableCloudInitNetwork: true
+  wideDhcpv6ClientService: false
 """,
     ),
     "SystemMirrorConfig": ConfigObjectCatalogEntry(
