@@ -880,9 +880,6 @@ def _render_gre(name: str, config: InterfaceConfig) -> list[str]:
     ]
     if config.remote_vip:
         lines.append(f"  pointopoint {config.remote_vip}")
-    if config.xfrm_transport:
-        selector = shlex.quote(f"xfrm/{config.xfrm_transport}")
-        lines.append(f"  pre-up gw start {selector} --verbose 0")
     lines.extend(
         [
             "  pre-up ip tunnel add $IFACE mode gre "
@@ -892,8 +889,9 @@ def _render_gre(name: str, config: InterfaceConfig) -> list[str]:
         ]
     )
     if config.xfrm_transport:
-        selector = shlex.quote(f"xfrm/{config.xfrm_transport}")
-        lines.append(f"  post-down gw stop {selector} --verbose 0 || true")
+        selector = shlex.quote(config.xfrm_transport)
+        lines.append(f"  post-up gw hook xfrm-start {selector} --verbose 0")
+        lines.append(f"  post-down gw hook xfrm-stop {selector} --verbose 0 || true")
     return lines
 
 
@@ -964,9 +962,6 @@ def _ppp_option_value(value: object) -> str:
 
 def _render_wireguard_iface(name: str, config: InterfaceConfig) -> list[str]:
     lines = _address_family(name, config)
-    if config.xfrm_transport:
-        selector = shlex.quote(f"xfrm/{config.xfrm_transport}")
-        lines.append(f"  pre-up gw start {selector} --verbose 0")
     lines.append("  pre-up ip link add dev $IFACE type wireguard")
     if config.private_key_file and not config.private_key:
         lines.append(
@@ -979,8 +974,9 @@ def _render_wireguard_iface(name: str, config: InterfaceConfig) -> list[str]:
         ]
     )
     if config.xfrm_transport:
-        selector = shlex.quote(f"xfrm/{config.xfrm_transport}")
-        lines.append(f"  post-down gw stop {selector} --verbose 0 || true")
+        selector = shlex.quote(config.xfrm_transport)
+        lines.append(f"  post-up gw hook xfrm-start {selector} --verbose 0")
+        lines.append(f"  post-down gw hook xfrm-stop {selector} --verbose 0 || true")
     return lines
 
 

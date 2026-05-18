@@ -81,8 +81,11 @@ spec:
 也不会因为已有或已删除的 state/policy 直接失败。
 
 `activation: manual` 不会在 `gw update` 时主动 start，适合交给 `Interface.spec.xfrmTransport`
-随接口生命周期启停。`activation: system` 会由 `dros-xfrm-<name>.service` 管理，适合不依附某个
-接口的 selector。
+随接口生命周期启停。接口生命周期中使用的是 `gw hook xfrm-start <name>` /
+`gw hook xfrm-stop <name>`，只负责把事件送入 `drosd` 队列；daemon 后续串行执行
+实际的 XFRM start/stop。因此它不会阻塞 ifupdown 等待 XFRM 已经应用，也不会和外层
+`gw update` 竞争手动 CLI lock。`activation: system` 会由 `dros-xfrm-<name>.service`
+管理，适合不依附某个接口的 selector。
 
 ## SPI、REQID 与 Key
 

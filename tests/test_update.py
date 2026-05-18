@@ -653,6 +653,7 @@ spec:
   address: 10.10.10.1/30
   localPublicIp: 198.51.100.1
   remotePublicIp: 203.0.113.1
+  xfrmTransport: office
   ttl: 255
 ---
 apiVersion: dros/v1alpha1
@@ -710,9 +711,13 @@ spec:
 
     gre = _interface_file(settings, "gre-office").read_text(encoding="utf-8")
     assert "iface gre-office inet static\n" in gre
+    assert "post-up gw hook xfrm-start office --verbose 0\n" in gre
     assert "pre-up ip tunnel add $IFACE mode gre" in gre
     assert "local 198.51.100.1 remote 203.0.113.1 ttl 255" in gre
     assert "post-down ip tunnel del $IFACE || true\n" in gre
+    assert "post-down gw hook xfrm-stop office --verbose 0 || true\n" in gre
+    assert "gw start xfrm/office" not in gre
+    assert "gw stop xfrm/office" not in gre
 
     pppoe_iface = _interface_file(settings, "pppoe-wan").read_text(encoding="utf-8")
     pppoe_peer = (settings.sys_root / "etc/ppp/peers/pppoe-wan").read_text(
@@ -730,10 +735,12 @@ spec:
         encoding="utf-8"
     )
     assert "iface wg0 inet static\n" in wg_iface
-    assert "pre-up gw start xfrm/office --verbose 0\n" in wg_iface
+    assert "post-up gw hook xfrm-start office --verbose 0\n" in wg_iface
     assert "pre-up ip link add dev $IFACE type wireguard\n" in wg_iface
     assert "pre-up wg setconf $IFACE /etc/wireguard/wg0.conf\n" in wg_iface
-    assert "post-down gw stop xfrm/office --verbose 0 || true\n" in wg_iface
+    assert "post-down gw hook xfrm-stop office --verbose 0 || true\n" in wg_iface
+    assert "gw start xfrm/office" not in wg_iface
+    assert "gw stop xfrm/office" not in wg_iface
     assert "PrivateKey = private-key\n" in wg_conf
     assert "ListenPort = 51820\n" in wg_conf
     assert "PublicKey = peer-key\n" in wg_conf
@@ -1137,6 +1144,106 @@ spec:
     commands = [" ".join(action.command or []) for action in executor.actions]
     assert any("sel src 10.0.0.1/32 dst 203.0.113.1/32 proto udp" in command for command in commands)
     assert any("ip xfrm policy add dir out src 10.0.0.1/32 dst 203.0.113.1/32 proto udp" in command for command in commands)
+
+
+def test_xfrm_hook_events_start_and_stop_transport(tmp_path: Path) -> None:
+    settings = _settings(tmp_path)
+    settings.paths.configs.mkdir(parents=True)
+    (settings.paths.configs / "xfrm.yaml").write_text(
+        """
+apiVersion: dros/v1alpha1
+kind: XfrmTransport
+metadata:
+  name: office
+spec:
+  localParty: partyA
+  selector:
+    proto: gre
+  partyA:
+    publicIp: 198.51.100.1
+    privateIp: 10.0.0.1
+  partyB:
+    publicIp: 203.0.113.1
+  spi:
+    partyAToPartyB: "0x100"
+    partyBToPartyA: "0x101"
+  reqid:
+    partyAToPartyB: 100
+    partyBToPartyA: 101
+  keys:
+    partyAToPartyB: "0x00112233445566778899aabbccddeeff00112233"
+    partyBToPartyA: "0xffeeddccbbaa99887766554433221100ffeeddcc"
+""".lstrip(),
+        encoding="utf-8",
+    )
+
+    start = process_event(settings, "xfrm-start", iface="office", console=_console(StringIO()))
+    stop = process_event(settings, "xfrm-stop", iface="office", console=_console(StringIO()))
+
+    start_commands = [" ".join(action.command or []) for action in start.actions]
+    stop_command_lists = [action.command or [] for action in stop.actions]
+    assert any("ip xfrm state add src 10.0.0.1 dst 203.0.113.1" in command for command in start_commands)
+    assert any("ip xfrm policy add dir out src 10.0.0.1/32 dst 203.0.113.1/32" in command for command in start_commands)
+    assert any(
+        command[:4]
+        == [
+            "sh",
+            "-c",
+            'ip xfrm state delete src "$1" dst "$2" proto esp spi "$3" 2>/dev/null || true',
+            "sh",
+        ]
+        and command[4:6] == ["10.0.0.1", "203.0.113.1"]
+        for command in stop_command_lists
+    )
+    assert any(
+        command[:4]
+        == [
+            "sh",
+            "-c",
+            'ip xfrm policy delete dir "$1" src "$2" dst "$3" proto "$4" 2>/dev/null || true',
+            "sh",
+        ]
+        and command[4:7] == ["out", "10.0.0.1/32", "203.0.113.1/32"]
+        for command in stop_command_lists
+    )
+
+
+def test_xfrm_hook_events_ignore_system_activation(tmp_path: Path) -> None:
+    settings = _settings(tmp_path)
+    settings.paths.configs.mkdir(parents=True)
+    (settings.paths.configs / "xfrm.yaml").write_text(
+        """
+apiVersion: dros/v1alpha1
+kind: XfrmTransport
+metadata:
+  name: office
+spec:
+  activation: system
+  localParty: partyA
+  selector:
+    proto: gre
+  partyA:
+    publicIp: 198.51.100.1
+  partyB:
+    publicIp: 203.0.113.1
+  spi:
+    partyAToPartyB: "0x100"
+    partyBToPartyA: "0x101"
+  reqid:
+    partyAToPartyB: 100
+    partyBToPartyA: 101
+  keys:
+    partyAToPartyB: "0x00112233445566778899aabbccddeeff00112233"
+    partyBToPartyA: "0xffeeddccbbaa99887766554433221100ffeeddcc"
+""".lstrip(),
+        encoding="utf-8",
+    )
+
+    start = process_event(settings, "xfrm-start", iface="office", console=_console(StringIO()))
+    stop = process_event(settings, "xfrm-stop", iface="office", console=_console(StringIO()))
+
+    assert start.actions == []
+    assert stop.actions == []
 
 
 def test_interface_rejects_system_activated_xfrm_transport(tmp_path: Path) -> None:

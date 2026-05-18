@@ -19,6 +19,7 @@ def create_plugin() -> DrosPlugin:
         managed_files=MANAGED_FILES,
         validation_hook=validate,
         update_hook=update,
+        event_hooks=frozenset({"xfrm-start", "xfrm-stop"}),
     )
 
 
@@ -68,6 +69,23 @@ def update(context: UpdateContext, objects: list[ConfigObject]) -> None:
         else:
             _remove_system_xfrm(context, obj.name)
             stop_xfrm(context, obj.name, config)
+
+
+def handle_event(context: UpdateContext, event: str, name: str | None = None) -> None:
+    if event not in {"xfrm-start", "xfrm-stop"} or not name:
+        return
+    target = name.removeprefix("xfrm/")
+    obj = context.configs.get("XfrmTransport", target)
+    if obj is None:
+        return
+    config = context.configs.resolve_object(obj, XfrmTransportConfig)
+    if config.activation != "manual":
+        return
+    if event == "xfrm-start":
+        if config.enabled:
+            start_xfrm(context, target, config)
+        return
+    stop_xfrm(context, target, config)
 
 
 def start_xfrm(context: UpdateContext, name: str, config: XfrmTransportConfig) -> None:

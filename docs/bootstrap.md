@@ -59,10 +59,11 @@ fight over the same package or file.
 The registry also keeps event hook metadata. System hooks currently enqueue
 events through `gw hook ...`; `drosd` polls the run directory queue and handles
 the event against the effective ConfigObjects loaded from `paths.configs`.
-Generated hooks do not run `gw update` inline. They append events to
-`{paths.run}/events.jsonl`, and the daemon processes the queue under a single
-process lock. Duplicate events in the same daemon polling batch are coalesced by
-`event + iface`.
+Generated hooks do not run `gw update` inline. Interface lifecycle hooks,
+including XFRM hooks rendered as `gw hook xfrm-start <name>` and
+`gw hook xfrm-stop <name>`, append events to `{paths.run}/events.jsonl`, and the
+daemon processes the queue under a single process lock. Duplicate events in the
+same daemon polling batch are coalesced by `event + iface`.
 
 Every `gw` CLI invocation that can load settings writes a JSONL trace to
 `{paths.logs}/gw-invocations.log`. Event enqueue and daemon-side event

@@ -461,8 +461,10 @@ docker network create --driver bridge --subnet <subnet> --opt com.docker.network
 ### `spec.xfrmTransport`
 
 仅 `type: gre` 和 `type: wireguard` 使用。引用 `activation: manual` 的 `XfrmTransport`
-对象。DROS 会在 ifupdown fragment 中渲染 `gw start xfrm/<name> --verbose 0` 和对应的
-`gw stop`。`activation: system` 的 XfrmTransport 不能被 Interface 引用。
+对象。DROS 会在 ifupdown fragment 中渲染 `gw hook xfrm-start <name> --verbose 0`
+和对应的 `gw hook xfrm-stop <name>`。hook 只入队给 `drosd`，不会在 ifupdown
+进程中同步执行 XFRM apply，也不会争抢手动 `gw update` 使用的 apply lock。
+`activation: system` 的 XfrmTransport 不能被 Interface 引用。
 
 默认值：无。
 
