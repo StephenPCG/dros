@@ -352,6 +352,8 @@ def _structured_mark_rules(context: UpdateContext, item: dict[str, Any], *, chai
         rules.append(f"{ingress_match} tcp dport {_port_set(match['tcpDports'])} {mark_expr}".strip())
     if match.get("udpDports"):
         rules.append(f"{ingress_match} udp dport {_port_set(match['udpDports'])} {mark_expr}".strip())
+    if match.get("icmp"):
+        rules.append(f"{ingress_match} meta nfproto ipv4 meta l4proto icmp {mark_expr}".strip())
     if not rules and ingress_match:
         rules.append(f"{ingress_match} {mark_expr}")
     return rules

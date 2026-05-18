@@ -523,6 +523,49 @@ spec:
     assert ["nft", "-f", "/etc/nftables.conf"] in _commands(result)
 
 
+def test_update_firewall_mark_rules_match_icmp(tmp_path: Path) -> None:
+    settings = _settings(tmp_path)
+    settings.paths.configs.mkdir(parents=True)
+    (settings.paths.configs / "firewall.yaml").write_text(
+        """
+kind: FwMark
+metadata:
+  name: lab
+spec:
+  mark: "0x00000100"
+  mask: "0x0000ff00"
+---
+kind: Firewall
+metadata:
+  name: main
+spec:
+  markRules:
+    - fwMark: lab
+      chains:
+        - prerouting
+        - output
+      match:
+        icmp: true
+""".lstrip(),
+        encoding="utf-8",
+    )
+
+    run_update(settings, target="firewall/main", console=_console(StringIO()))
+
+    nft = (settings.sys_root / "etc/dros/nftables.d/10-firewall.nft").read_text(
+        encoding="utf-8"
+    )
+    mark_expr = "meta mark set meta mark & 0xffff00ff | 0x00000100"
+    assert (
+        "add rule inet dros_route mark_prerouting "
+        f"meta nfproto ipv4 meta l4proto icmp {mark_expr}"
+    ) in nft
+    assert (
+        "add rule inet dros_route mark_output "
+        f"meta nfproto ipv4 meta l4proto icmp {mark_expr}"
+    ) in nft
+
+
 def test_update_interface_writes_openvpn_listen_snippet_without_firewall_reload(
     tmp_path: Path,
 ) -> None:

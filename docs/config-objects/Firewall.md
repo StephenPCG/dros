@@ -179,3 +179,4 @@ raw rule 中的 `iifgroup devgroup/<name>` 和 `oifgroup devgroup/<name>` 会解
 - `match.iifGroup`：入 devgroup 匹配
 - `match.tcpDports`：TCP 目标端口
 - `match.udpDports`：UDP 目标端口
+- `match.icmp`：设为 `true` 时匹配 IPv4 ICMP；可与 `iif` / `iifGroup` 组合
