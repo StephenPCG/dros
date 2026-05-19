@@ -599,6 +599,9 @@ wg set $IFACE private-key <privateKeyFile>
 如果是绝对路径，DROS 按目标系统路径读取；如果是相对路径，则相对于当前 ConfigObject
 YAML 文件所在目录读取。
 
+如果外部 `configFile` 比 `/etc/dros/openvpn/<name>.ovpn` 更新，即使内容相同，
+`gw update iface/<name>` 也会重新写入并 reload 该接口。
+
 `config` 和 `configFile` 必须二选一，不能同时设置。
 
 默认值：无。

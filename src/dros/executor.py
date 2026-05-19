@@ -82,11 +82,12 @@ class SystemExecutor:
         *,
         mode: int = 0o644,
         show_diff: bool = True,
+        force: bool = False,
     ) -> bool:
         target = self.target_path(path)
         logical = _logical_path(path)
         old_content = target.read_text(encoding="utf-8") if target.exists() else None
-        if old_content == content:
+        if old_content == content and not force:
             return False
 
         target.parent.mkdir(parents=True, exist_ok=True)

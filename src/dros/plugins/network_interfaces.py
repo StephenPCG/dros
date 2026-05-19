@@ -670,11 +670,7 @@ def _write_auxiliary_files(
         changed = wireguard_conf_changed
         changed = _write_wgsd_cron(context, name, config) or changed
     elif iface_type == "openvpn":
-        changed = context.executor.write_file(
-            _openvpn_config_path(name),
-            _render_openvpn_config(context, obj, config),
-            mode=0o600,
-        )
+        changed = _write_openvpn_config(context, obj, config)
         if _openvpn_needs_up_script(config):
             changed = (
                 context.executor.write_file(
@@ -1143,12 +1139,63 @@ def _render_openvpn_config(
 ) -> str:
     if config.config is not None:
         return _with_trailing_newline(config.config)
+    return _read_openvpn_config_file(context, obj, config)[0]
+
+
+def _write_openvpn_config(
+    context: UpdateContext,
+    obj: ConfigObject,
+    config: InterfaceConfig,
+) -> bool:
+    force = False
+    if config.config is not None:
+        content = _with_trailing_newline(config.config)
+    else:
+        content, source = _read_openvpn_config_file(context, obj, config)
+        force = _openvpn_source_is_newer_than_target(
+            context,
+            source,
+            _openvpn_config_path(obj.name),
+        )
+    return context.executor.write_file(
+        _openvpn_config_path(obj.name),
+        content,
+        mode=0o600,
+        force=force,
+    )
+
+
+def _read_openvpn_config_file(
+    context: UpdateContext,
+    obj: ConfigObject,
+    config: InterfaceConfig,
+) -> tuple[str, Path]:
     source = _openvpn_config_file_path(context, obj, str(config.config_file))
     try:
         content = source.read_text(encoding="utf-8")
     except FileNotFoundError as exc:
         raise ValueError(f"Interface/{obj.name}: openvpn configFile not found: {source}") from exc
-    return _with_trailing_newline(content)
+    return _with_trailing_newline(content), source
+
+
+def _openvpn_source_is_newer_than_target(
+    context: UpdateContext,
+    source: Path,
+    target: str,
+) -> bool:
+    target_path = context.executor.target_path(target)
+    if not target_path.exists():
+        return False
+    if _same_path(source, target_path):
+        return False
+    return source.stat().st_mtime_ns > target_path.stat().st_mtime_ns
+
+
+def _same_path(left: Path, right: Path) -> bool:
+    try:
+        return left.resolve() == right.resolve()
+    except OSError:
+        return left == right
 
 
 def _openvpn_config_file_path(

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from io import StringIO
 from pathlib import Path
 
@@ -1483,6 +1484,146 @@ spec:
         encoding="utf-8"
     )
     assert ovpn == "client\nremote vpn.example.net 1194\n"
+
+
+def test_update_interface_openvpn_reload_when_config_file_content_changes(tmp_path: Path) -> None:
+    settings = _settings(tmp_path)
+    settings.paths.configs.mkdir(parents=True)
+    config_file = settings.paths.configs / "client.conf"
+    config_file.write_text("client\nremote vpn-a.example.net 1194\n", encoding="utf-8")
+    (settings.paths.configs / "openvpn.yaml").write_text(
+        """
+kind: Interface
+metadata:
+  name: ovpn-client
+spec:
+  type: openvpn
+  configFile: client.conf
+""".lstrip(),
+        encoding="utf-8",
+    )
+    run_update(settings, target="iface/ovpn-client", console=_console(StringIO()))
+    config_file.write_text("client\nremote vpn-b.example.net 1194\n", encoding="utf-8")
+
+    result = run_update(settings, target="iface/ovpn-client", console=_console(StringIO()))
+
+    ovpn = (settings.sys_root / "etc/dros/openvpn/ovpn-client.ovpn").read_text(
+        encoding="utf-8"
+    )
+    commands = [" ".join(action.command or []) for action in result.actions]
+    assert ovpn == "client\nremote vpn-b.example.net 1194\n"
+    assert "ifdown --force ovpn-client" in commands
+    assert "ifup ovpn-client" in commands
+
+
+def test_update_interface_openvpn_reload_when_absolute_config_file_content_changes(
+    tmp_path: Path,
+) -> None:
+    settings = _settings(tmp_path)
+    settings.paths.configs.mkdir(parents=True)
+    config_file = settings.sys_root / "opt/gateway/ovpn/lab/clients/alice/client-auto.ovpn"
+    config_file.parent.mkdir(parents=True)
+    config_file.write_text("client\nremote vpn-a.example.net 1194\n", encoding="utf-8")
+    (settings.paths.configs / "openvpn.yaml").write_text(
+        """
+kind: Interface
+metadata:
+  name: ovpn-client
+spec:
+  type: openvpn
+  configFile: /opt/gateway/ovpn/lab/clients/alice/client-auto.ovpn
+""".lstrip(),
+        encoding="utf-8",
+    )
+    run_update(settings, target="iface/ovpn-client", console=_console(StringIO()))
+    config_file.write_text("client\nremote vpn-b.example.net 1194\n", encoding="utf-8")
+
+    result = run_update(settings, target="iface/ovpn-client", console=_console(StringIO()))
+
+    ovpn = (settings.sys_root / "etc/dros/openvpn/ovpn-client.ovpn").read_text(
+        encoding="utf-8"
+    )
+    commands = [" ".join(action.command or []) for action in result.actions]
+    assert ovpn == "client\nremote vpn-b.example.net 1194\n"
+    assert "ifdown --force ovpn-client" in commands
+    assert "ifup ovpn-client" in commands
+
+
+def test_update_interface_openvpn_reload_when_external_config_file_is_newer(
+    tmp_path: Path,
+) -> None:
+    settings = _settings(tmp_path)
+    settings.paths.configs.mkdir(parents=True)
+    config_file = settings.paths.configs / "client.conf"
+    config_file.write_text("client\nremote vpn.example.net 1194\n", encoding="utf-8")
+    (settings.paths.configs / "openvpn.yaml").write_text(
+        """
+kind: Interface
+metadata:
+  name: ovpn-client
+spec:
+  type: openvpn
+  configFile: client.conf
+""".lstrip(),
+        encoding="utf-8",
+    )
+    run_update(settings, target="iface/ovpn-client", console=_console(StringIO()))
+    target = settings.sys_root / "etc/dros/openvpn/ovpn-client.ovpn"
+    old_target_mtime = 1_000_000_000
+    os.utime(target, ns=(old_target_mtime, old_target_mtime))
+    source_mtime = config_file.stat().st_mtime_ns
+
+    result = run_update(settings, target="iface/ovpn-client", console=_console(StringIO()))
+
+    commands = [" ".join(action.command or []) for action in result.actions]
+    assert target.read_text(encoding="utf-8") == "client\nremote vpn.example.net 1194\n"
+    assert source_mtime > old_target_mtime
+    assert target.stat().st_mtime_ns >= source_mtime
+    assert "ifdown --force ovpn-client" in commands
+    assert "ifup ovpn-client" in commands
+
+
+def test_update_interface_openvpn_reload_when_inline_config_changes(tmp_path: Path) -> None:
+    settings = _settings(tmp_path)
+    settings.paths.configs.mkdir(parents=True)
+    config_path = settings.paths.configs / "openvpn.yaml"
+    config_path.write_text(
+        """
+kind: Interface
+metadata:
+  name: ovpn-client
+spec:
+  type: openvpn
+  config: |
+    client
+    remote vpn-a.example.net 1194
+""".lstrip(),
+        encoding="utf-8",
+    )
+    run_update(settings, target="iface/ovpn-client", console=_console(StringIO()))
+    config_path.write_text(
+        """
+kind: Interface
+metadata:
+  name: ovpn-client
+spec:
+  type: openvpn
+  config: |
+    client
+    remote vpn-b.example.net 1194
+""".lstrip(),
+        encoding="utf-8",
+    )
+
+    result = run_update(settings, target="iface/ovpn-client", console=_console(StringIO()))
+
+    ovpn = (settings.sys_root / "etc/dros/openvpn/ovpn-client.ovpn").read_text(
+        encoding="utf-8"
+    )
+    commands = [" ".join(action.command or []) for action in result.actions]
+    assert ovpn == "client\nremote vpn-b.example.net 1194\n"
+    assert "ifdown --force ovpn-client" in commands
+    assert "ifup ovpn-client" in commands
 
 
 def test_update_rejects_openvpn_without_single_config_source(tmp_path: Path) -> None:
