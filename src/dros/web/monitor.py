@@ -297,7 +297,7 @@ def _parse_openvpn_status(path: Path) -> list[dict[str, Any]]:
         return []
     headers: dict[str, list[str]] = {}
     clients: list[dict[str, Any]] = []
-    for row in csv.reader(content.splitlines()):
+    for row in _openvpn_status_rows(content):
         if not row:
             continue
         section = row[0]
@@ -308,6 +308,18 @@ def _parse_openvpn_status(path: Path) -> list[dict[str, Any]]:
             if client is not None:
                 clients.append(client)
     return clients
+
+
+def _openvpn_status_rows(content: str) -> list[list[str]]:
+    rows: list[list[str]] = []
+    for line in content.splitlines():
+        if not line.strip():
+            continue
+        if "\t" in line:
+            rows.append(line.split("\t"))
+        else:
+            rows.extend(csv.reader([line]))
+    return rows
 
 
 def _parse_openvpn_client_row(values: list[str], header: list[str] | None) -> dict[str, Any] | None:

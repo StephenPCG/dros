@@ -205,14 +205,20 @@ def test_web_monitor_devices_require_auth_and_merge_dnsmasq_leases_with_arp(tmp_
 def test_web_monitor_openvpn_clients_require_auth_and_parse_status_v3(tmp_path: Path) -> None:
     run = tmp_path / "run"
     run.mkdir()
-    (run / "openvpn.office.status").write_text(
-        "TITLE,OpenVPN 2.6.0 x86_64-pc-linux-gnu\n"
-        "TIME,2026-05-20 12:00:00,1779259200\n"
-        "HEADER,CLIENT_LIST,Common Name,Real Address,Virtual Address,Virtual IPv6 Address,"
-        "Bytes Received,Bytes Sent,Connected Since,Connected Since (time_t),Username,"
-        "Client ID,Peer ID,Data Channel Cipher\n"
-        "CLIENT_LIST,alice,203.0.113.10:55320,10.8.0.2,fd00::2,1234,5678,"
-        "2026-05-20 11:58:00,1779259080,UNDEF,0,0,AES-256-GCM\n",
+    (run / "openvpn.ovpn-lan.status").write_text(
+        "TITLE\tOpenVPN 2.6.14 x86_64-pc-linux-gnu\n"
+        "TIME\t2026-05-20 00:53:03\t1779209583\n"
+        "HEADER\tCLIENT_LIST\tCommon Name\tReal Address\tVirtual Address\t"
+        "Virtual IPv6 Address\tBytes Received\tBytes Sent\tConnected Since\t"
+        "Connected Since (time_t)\tUsername\tClient ID\tPeer ID\tData Channel Cipher\n"
+        "CLIENT_LIST\tzhangcheng\t180.107.236.117:59300\t10.80.249.2\t\t"
+        "2038896\t3753282\t2026-05-20 00:49:05\t1779209345\tUNDEF\t0\t0\tAES-256-GCM\n"
+        "HEADER\tROUTING_TABLE\tVirtual Address\tCommon Name\tReal Address\tLast Ref\tLast Ref (time_t)\n"
+        "ROUTING_TABLE\t10.80.249.2\tzhangcheng\t180.107.236.117:59300\t"
+        "2026-05-20 00:53:02\t1779209582\n"
+        "GLOBAL_STATS\tMax bcast/mcast queue length\t0\n"
+        "GLOBAL_STATS\tdco_enabled\t0\n"
+        "END\n",
         encoding="utf-8",
     )
     sysroot = tmp_path / "sysroot"
@@ -235,17 +241,17 @@ def test_web_monitor_openvpn_clients_require_auth_and_parse_status_v3(tmp_path: 
     assert response.status_code == 200
     assert response.json()["clients"] == [
         {
-            "interface": "office",
-            "commonName": "alice",
-            "realAddress": "203.0.113.10:55320",
-            "publicIp": "203.0.113.10",
-            "publicPort": 55320,
-            "virtualAddress": "10.8.0.2",
-            "virtualIpv6Address": "fd00::2",
-            "connectedSince": "2026-05-20 11:58:00",
-            "connectedSinceTimestamp": 1779259080,
-            "bytesReceived": 1234,
-            "bytesSent": 5678,
+            "interface": "ovpn-lan",
+            "commonName": "zhangcheng",
+            "realAddress": "180.107.236.117:59300",
+            "publicIp": "180.107.236.117",
+            "publicPort": 59300,
+            "virtualAddress": "10.80.249.2",
+            "virtualIpv6Address": None,
+            "connectedSince": "2026-05-20 00:49:05",
+            "connectedSinceTimestamp": 1779209345,
+            "bytesReceived": 2038896,
+            "bytesSent": 3753282,
         }
     ]
 
