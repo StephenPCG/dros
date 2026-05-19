@@ -1143,7 +1143,11 @@ def _render_openvpn_config(
         content = _with_trailing_newline(config.config)
     else:
         content = _read_openvpn_config_file(context, obj, config)[0]
-    return _append_openvpn_extra_config_lines(content, config)
+    return _append_openvpn_runtime_config_lines(
+        content,
+        config,
+        _openvpn_status_path(context.settings, obj.name),
+    )
 
 
 def _write_openvpn_config(
@@ -1161,7 +1165,11 @@ def _write_openvpn_config(
             source,
             _openvpn_config_path(obj.name),
         )
-    content = _append_openvpn_extra_config_lines(content, config)
+    content = _append_openvpn_runtime_config_lines(
+        content,
+        config,
+        _openvpn_status_path(context.settings, obj.name),
+    )
     return context.executor.write_file(
         _openvpn_config_path(obj.name),
         content,
@@ -1183,11 +1191,28 @@ def _read_openvpn_config_file(
     return _with_trailing_newline(content), source
 
 
-def _append_openvpn_extra_config_lines(content: str, config: InterfaceConfig) -> str:
+def _append_openvpn_runtime_config_lines(
+    content: str,
+    config: InterfaceConfig,
+    status_path: Path,
+) -> str:
     content = _with_trailing_newline(content)
-    if not config.extra_config_lines:
-        return content
-    return content + "".join(_with_trailing_newline(line) for line in config.extra_config_lines)
+    additions = [_with_trailing_newline(line) for line in config.extra_config_lines]
+    if not _has_openvpn_directive(content, "status"):
+        additions.append(f"status {status_path} 10\n")
+    if not _has_openvpn_directive(content, "status-version"):
+        additions.append("status-version 3\n")
+    return content + "".join(additions)
+
+
+def _has_openvpn_directive(content: str, directive: str) -> bool:
+    for line in content.splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith(("#", ";")):
+            continue
+        if stripped.split(maxsplit=1)[0] == directive:
+            return True
+    return False
 
 
 def _openvpn_source_is_newer_than_target(
@@ -1255,6 +1280,10 @@ def _openvpn_config_path(name: str) -> str:
 
 def _openvpn_up_path(name: str) -> str:
     return f"{OPENVPN_DIR}/{_safe_name(name)}.up"
+
+
+def _openvpn_status_path(settings: DrosSettings, name: str) -> Path:
+    return settings.paths.run / f"openvpn.{_safe_name(name)}.status"
 
 
 def _ensure_docker_network(context: UpdateContext, name: str, config: InterfaceConfig) -> None:

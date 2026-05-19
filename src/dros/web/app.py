@@ -25,7 +25,12 @@ from dros.ovpn import (
 )
 from dros.settings import DrosSettings
 from dros.web.auth import COOKIE_NAME, WebAuthStore, resolve_auth_db_path
-from dros.web.monitor import collect_monitor_summary
+from dros.web.dashboards import DashboardState, load_dashboard_state, save_dashboard_state
+from dros.web.monitor import (
+    collect_monitor_summary,
+    collect_network_devices,
+    collect_openvpn_clients,
+)
 from dros.web.rrd import collect_bandwidth_series, collect_ping_series, collect_rrd_targets
 
 
@@ -132,6 +137,25 @@ def create_app(settings: DrosSettings | None = None) -> FastAPI:
     @api.get("/api/monitor/summary")
     def monitor_summary(_username: str = Depends(require_auth)) -> dict[str, object]:
         return collect_monitor_summary(settings)
+
+    @api.get("/api/monitor/devices")
+    def monitor_devices(_username: str = Depends(require_auth)) -> dict[str, object]:
+        return collect_network_devices(settings)
+
+    @api.get("/api/monitor/openvpn-clients")
+    def monitor_openvpn_clients(_username: str = Depends(require_auth)) -> dict[str, object]:
+        return collect_openvpn_clients(settings)
+
+    @api.get("/api/monitor/dashboards")
+    def monitor_dashboards(_username: str = Depends(require_auth)) -> dict[str, object]:
+        return load_dashboard_state(settings).model_dump(mode="json", by_alias=True)
+
+    @api.put("/api/monitor/dashboards")
+    def monitor_save_dashboards(
+        payload: DashboardState,
+        _username: str = Depends(require_auth),
+    ) -> dict[str, object]:
+        return save_dashboard_state(settings, payload).model_dump(mode="json", by_alias=True)
 
     @api.get("/api/monitor/rrd/targets")
     def monitor_rrd_targets(_username: str = Depends(require_auth)) -> dict[str, object]:

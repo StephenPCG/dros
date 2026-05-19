@@ -54,6 +54,17 @@ def test_monitor_dashboard_grid_uses_finer_resize_columns() -> None:
     assert "y: Math.floor((index * width) / columns) * height" in source
 
 
+def test_web_frontend_dashboard_uses_server_storage_and_fixed_datetime_format() -> None:
+    source = (Path(__file__).resolve().parents[1] / "web/src/App.tsx").read_text(encoding="utf-8")
+
+    assert '"/api/monitor/dashboards"' in source
+    assert "window.localStorage.setItem(DASHBOARD_STORAGE_KEY" not in source
+    assert "布局和时间段保存在服务端" in source
+    assert "function formatDateTime" in source
+    assert ".toLocaleString(" not in source
+    assert ".toLocaleDateString(" not in source
+
+
 def test_web_monitor_summary_requires_auth_and_reports_system_counters(tmp_path: Path) -> None:
     sysroot = tmp_path / "sysroot"
     (sysroot / "proc").mkdir(parents=True)
@@ -89,6 +100,154 @@ def test_web_monitor_summary_requires_auth_and_reports_system_counters(tmp_path:
     assert payload["memory"]["usedBytes"] == 768 * 1024
     assert payload["interfaces"][0]["name"] == "eth0"
     assert payload["interfaces"][0]["rxBytes"] == 1000
+
+
+def test_web_monitor_dashboards_require_auth_and_persist_to_server_run_dir(tmp_path: Path) -> None:
+    sysroot = tmp_path / "sysroot"
+    sysroot.mkdir()
+    settings = DrosSettings(
+        sysRoot=sysroot,
+        paths=DrosPaths(configs=tmp_path / "configs"),
+        web=WebSettings(authDb=tmp_path / "web-auth.sqlite3"),
+    )
+    WebAuthStore(settings.web.auth_db).create_user("alice", "secret")
+    client = TestClient(create_app(settings))
+    payload = {
+        "dashboards": [
+            {
+                "id": "dashboard-main",
+                "name": "Main",
+                "timespan": "4h",
+                "charts": [{"id": "chart-wan", "type": "bandwidth", "target": "pppoe-telecom"}],
+                "layouts": {"lg": [{"i": "chart-wan", "x": 0, "y": 0, "w": 4, "h": 12}]},
+                "layoutVersion": 2,
+            }
+        ],
+        "activeDashboardId": "dashboard-main",
+    }
+
+    assert client.get("/api/monitor/dashboards").status_code == 401
+    assert client.put("/api/monitor/dashboards", json=payload).status_code == 401
+    assert client.post(
+        "/api/auth/login",
+        json={"username": "alice", "password": "secret", "remember": False},
+    ).status_code == 200
+
+    assert client.get("/api/monitor/dashboards").json() == {
+        "dashboards": [],
+        "activeDashboardId": None,
+    }
+    response = client.put("/api/monitor/dashboards", json=payload)
+
+    assert response.status_code == 200
+    assert response.json() == payload
+    stored = sysroot / "opt/gateway/run/web/dashboards.json"
+    assert stored.exists()
+    assert "dashboard-main" in stored.read_text(encoding="utf-8")
+    client2 = TestClient(create_app(settings))
+    assert client2.post(
+        "/api/auth/login",
+        json={"username": "alice", "password": "secret", "remember": False},
+    ).status_code == 200
+    assert client2.get("/api/monitor/dashboards").json() == payload
+
+
+def test_web_monitor_devices_require_auth_and_merge_dnsmasq_leases_with_arp(tmp_path: Path) -> None:
+    sysroot = tmp_path / "sysroot"
+    (sysroot / "proc/net").mkdir(parents=True)
+    (sysroot / "var/lib/misc").mkdir(parents=True)
+    (sysroot / "proc/net/arp").write_text(
+        "IP address       HW type     Flags       HW address            Mask     Device\n"
+        "192.168.8.10     0x1         0x2         00:11:22:33:44:55     *        br0\n"
+        "192.168.8.20     0x1         0x2         aa:bb:cc:dd:ee:ff     *        br0\n",
+        encoding="utf-8",
+    )
+    (sysroot / "var/lib/misc/dnsmasq.leases").write_text(
+        "1900000000 00:11:22:33:44:55 192.168.8.10 nas 01:00:11:22:33:44:55\n",
+        encoding="utf-8",
+    )
+    settings = DrosSettings(
+        sysRoot=sysroot,
+        paths=DrosPaths(configs=tmp_path / "configs"),
+        web=WebSettings(authDb=tmp_path / "web-auth.sqlite3"),
+    )
+    WebAuthStore(settings.web.auth_db).create_user("alice", "secret")
+    client = TestClient(create_app(settings))
+
+    assert client.get("/api/monitor/devices").status_code == 401
+    assert client.post(
+        "/api/auth/login",
+        json={"username": "alice", "password": "secret", "remember": False},
+    ).status_code == 200
+    response = client.get("/api/monitor/devices")
+
+    assert response.status_code == 200
+    assert response.json()["devices"] == [
+        {
+            "hostname": "nas",
+            "ipAddresses": ["192.168.8.10"],
+            "macAddress": "00:11:22:33:44:55",
+            "interface": "br0",
+            "sources": ["arp", "dnsmasq"],
+            "leaseExpiresAt": 1900000000,
+        },
+        {
+            "hostname": None,
+            "ipAddresses": ["192.168.8.20"],
+            "macAddress": "aa:bb:cc:dd:ee:ff",
+            "interface": "br0",
+            "sources": ["arp"],
+            "leaseExpiresAt": None,
+        },
+    ]
+
+
+def test_web_monitor_openvpn_clients_require_auth_and_parse_status_v3(tmp_path: Path) -> None:
+    run = tmp_path / "run"
+    run.mkdir()
+    (run / "openvpn.office.status").write_text(
+        "TITLE,OpenVPN 2.6.0 x86_64-pc-linux-gnu\n"
+        "TIME,2026-05-20 12:00:00,1779259200\n"
+        "HEADER,CLIENT_LIST,Common Name,Real Address,Virtual Address,Virtual IPv6 Address,"
+        "Bytes Received,Bytes Sent,Connected Since,Connected Since (time_t),Username,"
+        "Client ID,Peer ID,Data Channel Cipher\n"
+        "CLIENT_LIST,alice,203.0.113.10:55320,10.8.0.2,fd00::2,1234,5678,"
+        "2026-05-20 11:58:00,1779259080,UNDEF,0,0,AES-256-GCM\n",
+        encoding="utf-8",
+    )
+    sysroot = tmp_path / "sysroot"
+    sysroot.mkdir()
+    settings = DrosSettings(
+        sysRoot=sysroot,
+        paths=DrosPaths(configs=tmp_path / "configs", run=run),
+        web=WebSettings(authDb=tmp_path / "web-auth.sqlite3"),
+    )
+    WebAuthStore(settings.web.auth_db).create_user("alice", "secret")
+    client = TestClient(create_app(settings))
+
+    assert client.get("/api/monitor/openvpn-clients").status_code == 401
+    assert client.post(
+        "/api/auth/login",
+        json={"username": "alice", "password": "secret", "remember": False},
+    ).status_code == 200
+    response = client.get("/api/monitor/openvpn-clients")
+
+    assert response.status_code == 200
+    assert response.json()["clients"] == [
+        {
+            "interface": "office",
+            "commonName": "alice",
+            "realAddress": "203.0.113.10:55320",
+            "publicIp": "203.0.113.10",
+            "publicPort": 55320,
+            "virtualAddress": "10.8.0.2",
+            "virtualIpv6Address": "fd00::2",
+            "connectedSince": "2026-05-20 11:58:00",
+            "connectedSinceTimestamp": 1779259080,
+            "bytesReceived": 1234,
+            "bytesSent": 5678,
+        }
+    ]
 
 
 def test_web_logs_require_auth_and_return_invocation_and_error_records(tmp_path: Path) -> None:

@@ -690,6 +690,8 @@ post-down /usr/lib/dros/openvpn-iface stop <name> <pid>
 ```
 
 helper 会向 OpenVPN 追加 `--dev <name>`，因此最终设备名以 `metadata.name` 为准。
+生成的 `.ovpn` 文件会包含 `status {paths.run}/openvpn.<name>.status 10` 和
+`status-version 3`，Web 监控页通过这个运行态文件读取当前连接的 client 列表。
 
 PID 文件默认使用当前 settings 中的 `paths.run`，日志文件默认使用 `paths.logs`。
 

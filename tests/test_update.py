@@ -29,6 +29,10 @@ def _settings(tmp_path: Path) -> DrosSettings:
     )
 
 
+def _openvpn_status_config(settings: DrosSettings, name: str) -> str:
+    return f"status {settings.paths.run / f'openvpn.{name}.status'} 10\nstatus-version 3\n"
+
+
 def test_config_check_validates_all_objects_without_applying(tmp_path: Path) -> None:
     settings = _settings(tmp_path)
     settings.paths.configs.mkdir(parents=True)
@@ -1454,6 +1458,7 @@ spec:
     assert "/usr/lib/dros/openvpn-iface stop ovpn-lab" in iface
     assert "dev-type tun\n" in ovpn
     assert "remote vpn.example.net 1194\n" in ovpn
+    assert _openvpn_status_config(settings, "ovpn-lab") in ovpn
     assert 'IFACE="ovpn-lab"\n' in up
     assert 'ip link set dev "$IFACE" group 9\n' in up
     assert "sh -c 'echo openvpn-up'\n" in up
@@ -1484,7 +1489,10 @@ spec:
     ovpn = (settings.sys_root / "etc/dros/openvpn/ovpn-client.ovpn").read_text(
         encoding="utf-8"
     )
-    assert ovpn == "client\nremote vpn.example.net 1194\n"
+    assert ovpn == (
+        "client\nremote vpn.example.net 1194\n"
+        + _openvpn_status_config(settings, "ovpn-client")
+    )
 
 
 def test_update_interface_openvpn_writes_route_refresh_up_script_by_default(
@@ -1553,6 +1561,7 @@ spec:
         "remote vpn.example.net 1194\n"
         "route-noexec\n"
         "pull-filter ignore redirect-gateway\n"
+        + _openvpn_status_config(settings, "ovpn-client")
     )
 
 
@@ -1581,7 +1590,10 @@ spec:
         encoding="utf-8"
     )
     commands = [" ".join(action.command or []) for action in result.actions]
-    assert ovpn == "client\nremote vpn-b.example.net 1194\n"
+    assert ovpn == (
+        "client\nremote vpn-b.example.net 1194\n"
+        + _openvpn_status_config(settings, "ovpn-client")
+    )
     assert "ifdown --force ovpn-client" in commands
     assert "ifup ovpn-client" in commands
 
@@ -1614,7 +1626,10 @@ spec:
         encoding="utf-8"
     )
     commands = [" ".join(action.command or []) for action in result.actions]
-    assert ovpn == "client\nremote vpn-b.example.net 1194\n"
+    assert ovpn == (
+        "client\nremote vpn-b.example.net 1194\n"
+        + _openvpn_status_config(settings, "ovpn-client")
+    )
     assert "ifdown --force ovpn-client" in commands
     assert "ifup ovpn-client" in commands
 
@@ -1646,7 +1661,9 @@ spec:
     result = run_update(settings, target="iface/ovpn-client", console=_console(StringIO()))
 
     commands = [" ".join(action.command or []) for action in result.actions]
-    assert target.read_text(encoding="utf-8") == "client\nremote vpn.example.net 1194\n"
+    assert target.read_text(encoding="utf-8") == (
+        "client\nremote vpn.example.net 1194\n" + _openvpn_status_config(settings, "ovpn-client")
+    )
     assert source_mtime > old_target_mtime
     assert target.stat().st_mtime_ns >= source_mtime
     assert "ifdown --force ovpn-client" in commands
@@ -1691,7 +1708,10 @@ spec:
         encoding="utf-8"
     )
     commands = [" ".join(action.command or []) for action in result.actions]
-    assert ovpn == "client\nremote vpn-b.example.net 1194\n"
+    assert ovpn == (
+        "client\nremote vpn-b.example.net 1194\n"
+        + _openvpn_status_config(settings, "ovpn-client")
+    )
     assert "ifdown --force ovpn-client" in commands
     assert "ifup ovpn-client" in commands
 

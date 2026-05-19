@@ -24,6 +24,7 @@ import {
   RefreshCw,
   RotateCw,
   ScrollText,
+  Search,
   Server,
   Shield,
   Sun,
@@ -47,7 +48,7 @@ type AuthState =
 
 type PageId = "monitor" | "tools" | "logs" | "openvpn"
 type MonitorViewId = "overview" | "bandwidth" | "ping"
-type MonitorTabKind = "overview" | "dashboard"
+type MonitorTabKind = "overview" | "devices" | "openvpnClients" | "dashboard"
 type LogsViewId = "invocations" | "errors"
 type Theme = "light" | "dark"
 type OpenVPNProfileKind = "server" | "client"
@@ -111,6 +112,29 @@ type MonitorSummary = {
   }>
 }
 
+type NetworkDevice = {
+  hostname: string | null
+  ipAddresses: string[]
+  macAddress: string | null
+  interface: string | null
+  sources: string[]
+  leaseExpiresAt: number | null
+}
+
+type OpenVPNClientConnection = {
+  interface: string
+  commonName: string | null
+  realAddress: string | null
+  publicIp: string | null
+  publicPort: number | null
+  virtualAddress: string | null
+  virtualIpv6Address: string | null
+  connectedSince: string | null
+  connectedSinceTimestamp: number | null
+  bytesReceived: number | null
+  bytesSent: number | null
+}
+
 type MonitorTimespan = {
   id: string
   label: string
@@ -172,6 +196,11 @@ type MonitorDashboard = {
   layoutVersion: number
 }
 
+type DashboardStatePayload = {
+  dashboards: MonitorDashboard[]
+  activeDashboardId: string | null
+}
+
 type DashboardChartSeries = BandwidthSeries | PingSeries
 
 type AddChartForm = {
@@ -223,6 +252,7 @@ echarts.use([GridComponent, GraphicComponent, LegendComponent, TooltipComponent,
 const DASHBOARD_STORAGE_KEY = "dros-monitor-dashboards-v1"
 const ACTIVE_DASHBOARD_STORAGE_KEY = "dros-monitor-active-dashboard-v1"
 const DASHBOARD_REFRESH_MS = 10_000
+const DASHBOARD_SAVE_DEBOUNCE_MS = 500
 const DASHBOARD_LAYOUT_VERSION = 2
 const DASHBOARD_BREAKPOINTS = { lg: 1100, md: 760, sm: 0 }
 const DASHBOARD_COLUMNS = { lg: 12, md: 8, sm: 4 }
@@ -589,14 +619,15 @@ function MobileNavigationDrawer({
 
 function MonitorPage() {
   const [targets, setTargets] = useState<MonitorRrdTargets | null>(null)
-  const [dashboards, setDashboards] = useState<MonitorDashboard[]>(() => loadDashboards())
+  const [dashboards, setDashboards] = useState<MonitorDashboard[]>([])
   const [activeDashboardId, setActiveDashboardId] = useState(
-    () => dashboardIdFromPath(window.location.pathname) ?? loadActiveDashboardId(),
+    () => dashboardIdFromPath(window.location.pathname) ?? "",
   )
   const [activeMonitorTab, setActiveMonitorTab] = useState<MonitorTabKind>(() =>
-    dashboardIdFromPath(window.location.pathname) ? "dashboard" : "overview",
+    monitorTabFromPath(window.location.pathname),
   )
   const [series, setSeries] = useState<Record<string, DashboardChartSeries>>({})
+  const [dashboardsLoaded, setDashboardsLoaded] = useState(false)
   const [loadingTargets, setLoadingTargets] = useState(true)
   const [loadingSeries, setLoadingSeries] = useState(false)
   const [error, setError] = useState("")
@@ -610,6 +641,60 @@ function MonitorPage() {
     .join("|")
 
   useEffect(() => {
+    let cancelled = false
+    async function loadDashboardState() {
+      try {
+        const data = await apiJson<DashboardStatePayload>("/api/monitor/dashboards")
+        if (cancelled) {
+          return
+        }
+        let nextDashboards = normalizeDashboards(data.dashboards)
+        let nextActiveDashboardId = data.activeDashboardId ?? ""
+        const browserState = loadBrowserDashboardState()
+        if (nextDashboards.length === 0 && browserState) {
+          nextDashboards = browserState.dashboards
+          nextActiveDashboardId = browserState.activeDashboardId ?? ""
+          saveDashboardState(nextDashboards, nextActiveDashboardId)
+            .then(clearBrowserDashboardState)
+            .catch((err: unknown) => setError(errorMessage(err, "迁移 Dashboard 到服务端失败")))
+        }
+        if (nextDashboards.length === 0) {
+          const dashboard = createDashboard("默认 Dashboard")
+          nextDashboards = [dashboard]
+          nextActiveDashboardId = dashboard.id
+        }
+        const pathDashboardId = dashboardIdFromPath(window.location.pathname)
+        const selectedDashboardId =
+          pathDashboardId && nextDashboards.some((dashboard) => dashboard.id === pathDashboardId)
+            ? pathDashboardId
+            : nextDashboards.some((dashboard) => dashboard.id === nextActiveDashboardId)
+              ? nextActiveDashboardId
+              : (nextDashboards[0]?.id ?? "")
+        setDashboards(nextDashboards)
+        setActiveDashboardId(selectedDashboardId)
+      } catch (err) {
+        if (!cancelled) {
+          setError(errorMessage(err, "加载 Dashboard 失败"))
+          const dashboard = createDashboard("默认 Dashboard")
+          setDashboards([dashboard])
+          setActiveDashboardId(dashboard.id)
+        }
+      } finally {
+        if (!cancelled) {
+          setDashboardsLoaded(true)
+        }
+      }
+    }
+    loadDashboardState()
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  useEffect(() => {
+    if (!dashboardsLoaded) {
+      return
+    }
     if (dashboards.length === 0) {
       const dashboard = createDashboard("默认 Dashboard")
       setDashboards([dashboard])
@@ -623,27 +708,27 @@ function MonitorPage() {
         pushMonitorPath(dashboardPath(nextDashboardId))
       }
     }
-  }, [activeDashboardId, activeMonitorTab, dashboards])
+  }, [activeDashboardId, activeMonitorTab, dashboards, dashboardsLoaded])
 
   useEffect(() => {
-    window.localStorage.setItem(DASHBOARD_STORAGE_KEY, JSON.stringify(dashboards))
-  }, [dashboards])
-
-  useEffect(() => {
-    if (activeDashboardId) {
-      window.localStorage.setItem(ACTIVE_DASHBOARD_STORAGE_KEY, activeDashboardId)
+    if (!dashboardsLoaded || dashboards.length === 0) {
+      return
     }
-  }, [activeDashboardId])
+    const timer = window.setTimeout(() => {
+      saveDashboardState(dashboards, activeDashboardId).catch((err: unknown) => {
+        setError(errorMessage(err, "保存 Dashboard 失败"))
+      })
+    }, DASHBOARD_SAVE_DEBOUNCE_MS)
+    return () => window.clearTimeout(timer)
+  }, [activeDashboardId, dashboards, dashboardsLoaded])
 
   useEffect(() => {
     function handlePopState() {
       const dashboardId = dashboardIdFromPath(window.location.pathname)
       if (dashboardId) {
         setActiveDashboardId(dashboardId)
-        setActiveMonitorTab("dashboard")
-      } else {
-        setActiveMonitorTab("overview")
       }
+      setActiveMonitorTab(monitorTabFromPath(window.location.pathname))
     }
     window.addEventListener("popstate", handlePopState)
     return () => window.removeEventListener("popstate", handlePopState)
@@ -740,6 +825,18 @@ function MonitorPage() {
     pushMonitorPath("/monitor")
   }
 
+  function selectDevices() {
+    setActiveMonitorTab("devices")
+    setMoreOpen(false)
+    pushMonitorPath("/monitor/devices")
+  }
+
+  function selectOpenVPNClients() {
+    setActiveMonitorTab("openvpnClients")
+    setMoreOpen(false)
+    pushMonitorPath("/monitor/openvpn-clients")
+  }
+
   function selectDashboard(dashboardId: string) {
     setActiveDashboardId(dashboardId)
     setActiveMonitorTab("dashboard")
@@ -827,6 +924,32 @@ function MonitorPage() {
         >
           概览
         </button>
+        <button
+          className={cn(
+            "h-9 min-w-fit rounded-sm px-3 text-sm font-medium transition-colors",
+            activeMonitorTab === "devices"
+              ? "bg-background text-foreground shadow-sm"
+              : "text-muted-foreground hover:text-foreground",
+          )}
+          type="button"
+          onClick={selectDevices}
+          aria-current={activeMonitorTab === "devices" ? "page" : undefined}
+        >
+          Device Browser
+        </button>
+        <button
+          className={cn(
+            "h-9 min-w-fit rounded-sm px-3 text-sm font-medium transition-colors",
+            activeMonitorTab === "openvpnClients"
+              ? "bg-background text-foreground shadow-sm"
+              : "text-muted-foreground hover:text-foreground",
+          )}
+          type="button"
+          onClick={selectOpenVPNClients}
+          aria-current={activeMonitorTab === "openvpnClients" ? "page" : undefined}
+        >
+          OpenVPN Client
+        </button>
         {dashboards.map((dashboard) => {
           const selected = activeMonitorTab === "dashboard" && dashboard.id === activeDashboard.id
           return (
@@ -852,6 +975,8 @@ function MonitorPage() {
       </div>
 
       {activeMonitorTab === "overview" ? <MonitorOverviewPage /> : null}
+      {activeMonitorTab === "devices" ? <DeviceBrowserPage /> : null}
+      {activeMonitorTab === "openvpnClients" ? <OpenVPNClientsPage /> : null}
 
       {activeMonitorTab === "dashboard" ? (
         <>
@@ -870,7 +995,7 @@ function MonitorPage() {
                 {loadingSeries ? <Loader2 className="size-4 animate-spin text-muted-foreground" /> : null}
               </div>
               <div className="mt-1 text-xs text-muted-foreground">
-                自动刷新 10s · 布局和时间段保存在当前浏览器
+                自动刷新 10s · 布局和时间段保存在服务端
               </div>
             </div>
             <div className="flex flex-wrap items-center gap-2">
@@ -958,7 +1083,7 @@ function MonitorPage() {
         <Modal title="删除 Dashboard" onClose={() => setDeleteConfirmOpen(false)}>
           <div className="space-y-4">
             <p className="text-sm text-muted-foreground">
-              确定删除 <span className="font-medium text-foreground">{activeDashboard.name}</span>？这个操作只会删除当前浏览器中保存的 Dashboard 配置。
+              确定删除 <span className="font-medium text-foreground">{activeDashboard.name}</span>？这个操作会删除服务端保存的 Dashboard 配置。
             </p>
             <div className="flex justify-end gap-2">
               <Button variant="outline" onClick={() => setDeleteConfirmOpen(false)}>
@@ -1399,6 +1524,7 @@ function baseChartOption({
     tooltip: {
       trigger: "axis",
       confine: true,
+      formatter: (params: unknown) => chartTooltipFormatter(params),
       axisPointer: {
         type: "cross",
         label: {
@@ -1411,6 +1537,7 @@ function baseChartOption({
       axisLabel: {
         color: "#64748b",
         hideOverlap: true,
+        formatter: (value: number | string) => formatDateTime(Number(value)),
       },
       axisLine: { lineStyle: { color: "rgba(148, 163, 184, 0.35)" } },
       axisTick: { lineStyle: { color: "rgba(148, 163, 184, 0.35)" } },
@@ -1432,6 +1559,63 @@ function baseChartOption({
           }
         : undefined,
   }
+}
+
+function chartTooltipFormatter(params: unknown): string {
+  const items = Array.isArray(params) ? params : [params]
+  const header = tooltipTimestamp(items[0])
+  const rows = items
+    .map((item) => {
+      if (!item || typeof item !== "object") {
+        return ""
+      }
+      const record = item as Record<string, unknown>
+      const marker = typeof record.marker === "string" ? record.marker : ""
+      const seriesName = typeof record.seriesName === "string" ? record.seriesName : "value"
+      return `${marker}${escapeHtml(seriesName)}: ${escapeHtml(formatTooltipValue(record.value))}`
+    })
+    .filter(Boolean)
+  return [header ? escapeHtml(header) : "", ...rows].filter(Boolean).join("<br/>")
+}
+
+function tooltipTimestamp(item: unknown): string | null {
+  if (!item || typeof item !== "object") {
+    return null
+  }
+  const value = (item as Record<string, unknown>).value
+  if (Array.isArray(value)) {
+    const timestamp = Number(value[0])
+    return Number.isFinite(timestamp) ? formatDateTime(timestamp) : null
+  }
+  return null
+}
+
+function formatTooltipValue(value: unknown): string {
+  const raw = Array.isArray(value) ? value[1] : value
+  if (typeof raw === "number") {
+    return Number.isInteger(raw) ? raw.toString() : raw.toFixed(2)
+  }
+  if (raw == null) {
+    return "-"
+  }
+  return String(raw)
+}
+
+function escapeHtml(value: string): string {
+  return value.replace(/[&<>"']/g, (char) => {
+    switch (char) {
+      case "&":
+        return "&amp;"
+      case "<":
+        return "&lt;"
+      case ">":
+        return "&gt;"
+      case '"':
+        return "&quot;"
+      default:
+        return "&#39;"
+    }
+  })
 }
 
 function MonitorSubNavigation({
@@ -1555,6 +1739,226 @@ function MonitorOverviewPage() {
         ) : (
           <div className="px-3 py-10 text-sm text-muted-foreground">
             {loading ? "正在加载" : "暂无接口数据"}
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
+function DeviceBrowserPage() {
+  const [devices, setDevices] = useState<NetworkDevice[]>([])
+  const [query, setQuery] = useState("")
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState("")
+
+  useEffect(() => {
+    loadDevices()
+    const timer = window.setInterval(loadDevices, DASHBOARD_REFRESH_MS)
+    return () => window.clearInterval(timer)
+  }, [])
+
+  async function loadDevices() {
+    setError("")
+    try {
+      const data = await apiJson<{ devices: NetworkDevice[] }>("/api/monitor/devices")
+      setDevices(data.devices)
+    } catch (err) {
+      setError(errorMessage(err, "加载设备列表失败"))
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const filteredDevices = useMemo(() => {
+    const needle = query.trim().toLowerCase()
+    if (!needle) {
+      return devices
+    }
+    return devices.filter((device) =>
+      [
+        device.hostname,
+        device.macAddress,
+        device.interface,
+        ...device.ipAddresses,
+        ...device.sources,
+      ].some((value) => value?.toLowerCase().includes(needle)),
+    )
+  }, [devices, query])
+
+  return (
+    <div className="space-y-4">
+      <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+        <label className="relative block min-w-0 md:w-96">
+          <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+          <input
+            className="h-10 w-full rounded-md border bg-background pl-9 pr-3 text-sm outline-none transition-colors focus:border-ring focus:ring-2 focus:ring-ring/20"
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            placeholder="搜索 hostname / IP / MAC"
+            aria-label="搜索设备"
+          />
+        </label>
+        <Button variant="outline" onClick={loadDevices} disabled={loading}>
+          {loading ? <Loader2 className="size-4 animate-spin" /> : <RefreshCw className="size-4" />}
+          刷新
+        </Button>
+      </div>
+
+      {error ? (
+        <div className="rounded-md border border-destructive/35 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+          {error}
+        </div>
+      ) : null}
+
+      <div className="overflow-hidden rounded-md border bg-background">
+        {loading ? (
+          <div className="grid h-40 place-items-center text-muted-foreground">
+            <Loader2 className="size-5 animate-spin" aria-label="Loading" />
+          </div>
+        ) : devices.length === 0 ? (
+          <div className="px-3 py-10 text-sm text-muted-foreground">暂无设备</div>
+        ) : filteredDevices.length === 0 ? (
+          <div className="px-3 py-10 text-sm text-muted-foreground">没有匹配设备</div>
+        ) : (
+          <div className="h-[32rem] max-w-full overflow-auto">
+            <table className="w-full min-w-[58rem] text-left text-sm">
+              <thead className="sticky top-0 z-10 border-b bg-muted text-xs uppercase text-muted-foreground">
+                <tr>
+                  <th className="sticky left-0 z-20 w-52 min-w-52 border-r bg-muted px-3 py-2 font-medium">
+                    Hostname
+                  </th>
+                  <th className="px-3 py-2 font-medium">IP 地址</th>
+                  <th className="px-3 py-2 font-medium">MAC 地址</th>
+                  <th className="px-3 py-2 font-medium">接口</th>
+                  <th className="px-3 py-2 font-medium">来源</th>
+                  <th className="px-3 py-2 font-medium">Lease</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y">
+                {filteredDevices.map((device, index) => (
+                  <tr key={`${device.macAddress ?? device.ipAddresses.join(",")}:${index}`}>
+                    <td className="sticky left-0 z-10 w-52 min-w-52 border-r bg-background px-3 py-3">
+                      <div className="truncate font-medium">{device.hostname ?? "-"}</div>
+                    </td>
+                    <td className="px-3 py-3 font-mono text-xs">
+                      <div className="flex flex-wrap gap-1">
+                        {device.ipAddresses.map((ipAddress) => (
+                          <span key={ipAddress} className="rounded-md border px-2 py-1">
+                            {ipAddress}
+                          </span>
+                        ))}
+                      </div>
+                    </td>
+                    <td className="px-3 py-3 font-mono text-xs">{device.macAddress ?? "-"}</td>
+                    <td className="px-3 py-3 font-mono text-xs">{device.interface ?? "-"}</td>
+                    <td className="px-3 py-3 text-xs text-muted-foreground">{device.sources.join(", ")}</td>
+                    <td className="px-3 py-3 text-xs text-muted-foreground">
+                      {formatUnixTime(device.leaseExpiresAt)}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
+function OpenVPNClientsPage() {
+  const [clients, setClients] = useState<OpenVPNClientConnection[]>([])
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState("")
+
+  useEffect(() => {
+    loadClients()
+    const timer = window.setInterval(loadClients, DASHBOARD_REFRESH_MS)
+    return () => window.clearInterval(timer)
+  }, [])
+
+  async function loadClients() {
+    setError("")
+    try {
+      const data = await apiJson<{ clients: OpenVPNClientConnection[] }>(
+        "/api/monitor/openvpn-clients",
+      )
+      setClients(data.clients)
+    } catch (err) {
+      setError(errorMessage(err, "加载 OpenVPN Client 失败"))
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  return (
+    <div className="space-y-4">
+      <div className="flex justify-end">
+        <Button variant="outline" onClick={loadClients} disabled={loading}>
+          {loading ? <Loader2 className="size-4 animate-spin" /> : <RefreshCw className="size-4" />}
+          刷新
+        </Button>
+      </div>
+
+      {error ? (
+        <div className="rounded-md border border-destructive/35 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+          {error}
+        </div>
+      ) : null}
+
+      <div className="overflow-hidden rounded-md border bg-background">
+        {loading ? (
+          <div className="grid h-40 place-items-center text-muted-foreground">
+            <Loader2 className="size-5 animate-spin" aria-label="Loading" />
+          </div>
+        ) : clients.length === 0 ? (
+          <div className="px-3 py-10 text-sm text-muted-foreground">暂无 OpenVPN Client</div>
+        ) : (
+          <div className="h-[32rem] max-w-full overflow-auto">
+            <table className="w-full min-w-[64rem] text-left text-sm">
+              <thead className="sticky top-0 z-10 border-b bg-muted text-xs uppercase text-muted-foreground">
+                <tr>
+                  <th className="sticky left-0 z-20 w-40 min-w-40 border-r bg-muted px-3 py-2 font-medium">
+                    CN
+                  </th>
+                  <th className="px-3 py-2 font-medium">接口</th>
+                  <th className="px-3 py-2 font-medium">内网 IP</th>
+                  <th className="px-3 py-2 font-medium">公网 IP</th>
+                  <th className="px-3 py-2 font-medium">连接时间</th>
+                  <th className="px-3 py-2 text-right font-medium">RX</th>
+                  <th className="px-3 py-2 text-right font-medium">TX</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y">
+                {clients.map((client, index) => (
+                  <tr key={`${client.interface}:${client.commonName ?? ""}:${client.realAddress ?? ""}:${index}`}>
+                    <td className="sticky left-0 z-10 w-40 min-w-40 border-r bg-background px-3 py-3">
+                      <div className="truncate font-medium">{client.commonName ?? "-"}</div>
+                    </td>
+                    <td className="px-3 py-3 font-mono text-xs">{client.interface}</td>
+                    <td className="px-3 py-3 font-mono text-xs">
+                      <div className="flex flex-wrap gap-1">
+                        {openVPNInnerAddresses(client).map((address) => (
+                          <span key={address} className="rounded-md border px-2 py-1">
+                            {address}
+                          </span>
+                        ))}
+                        {openVPNInnerAddresses(client).length === 0 ? "-" : null}
+                      </div>
+                    </td>
+                    <td className="px-3 py-3 font-mono text-xs">{formatPublicAddress(client)}</td>
+                    <td className="px-3 py-3 text-xs text-muted-foreground">
+                      {formatUnixTime(client.connectedSinceTimestamp, client.connectedSince)}
+                    </td>
+                    <td className="px-3 py-3 text-right font-mono text-xs">
+                      {formatBytes(client.bytesReceived)}
+                    </td>
+                    <td className="px-3 py-3 text-right font-mono text-xs">{formatBytes(client.bytesSent)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
           </div>
         )}
       </div>
@@ -2832,27 +3236,39 @@ function fileName(path: string): string {
   return path.split("/").pop() || path
 }
 
-function loadDashboards(): MonitorDashboard[] {
+function loadBrowserDashboardState(): DashboardStatePayload | null {
   try {
     const raw = window.localStorage.getItem(DASHBOARD_STORAGE_KEY)
     if (!raw) {
-      return [createDashboard("默认 Dashboard")]
+      return null
     }
     const parsed = JSON.parse(raw) as unknown
     if (!Array.isArray(parsed)) {
-      return [createDashboard("默认 Dashboard")]
+      return null
     }
-    const dashboards = parsed
-      .map(normalizeDashboard)
-      .filter((dashboard): dashboard is MonitorDashboard => dashboard !== null)
-    return dashboards.length > 0 ? dashboards : [createDashboard("默认 Dashboard")]
+    const dashboards = normalizeDashboards(parsed)
+    if (dashboards.length === 0) {
+      return null
+    }
+    const activeDashboardId = window.localStorage.getItem(ACTIVE_DASHBOARD_STORAGE_KEY) ?? dashboards[0].id
+    return { dashboards, activeDashboardId }
   } catch {
-    return [createDashboard("默认 Dashboard")]
+    return null
   }
 }
 
-function loadActiveDashboardId(): string {
-  return window.localStorage.getItem(ACTIVE_DASHBOARD_STORAGE_KEY) ?? ""
+function clearBrowserDashboardState() {
+  window.localStorage.removeItem(DASHBOARD_STORAGE_KEY)
+  window.localStorage.removeItem(ACTIVE_DASHBOARD_STORAGE_KEY)
+}
+
+function normalizeDashboards(value: unknown): MonitorDashboard[] {
+  if (!Array.isArray(value)) {
+    return []
+  }
+  return value
+    .map(normalizeDashboard)
+    .filter((dashboard): dashboard is MonitorDashboard => dashboard !== null)
 }
 
 function normalizeDashboard(value: unknown): MonitorDashboard | null {
@@ -3168,19 +3584,69 @@ function formatBitRate(bitsPerSecond: number): string {
 }
 
 function formatChartTime(timestamp: number): string {
-  return new Date(timestamp * 1000).toLocaleString(undefined, {
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-  })
+  return formatDateTime(timestamp * 1000)
 }
 
 function formatLogTime(timestamp: number | undefined): string {
   if (timestamp == null) {
     return "-"
   }
-  return new Date(timestamp * 1000).toLocaleString()
+  return formatDateTime(timestamp * 1000)
+}
+
+function formatUnixTime(timestamp: number | null | undefined, fallback?: string | null): string {
+  if (timestamp == null) {
+    return formatDateText(fallback) ?? "-"
+  }
+  if (timestamp === 0) {
+    return "永不过期"
+  }
+  return formatDateTime(timestamp * 1000)
+}
+
+function formatDateTime(timestampMs: number): string {
+  const date = new Date(timestampMs)
+  if (Number.isNaN(date.getTime())) {
+    return "-"
+  }
+  const year = date.getFullYear()
+  const month = padDatePart(date.getMonth() + 1)
+  const day = padDatePart(date.getDate())
+  const hour = padDatePart(date.getHours())
+  const minute = padDatePart(date.getMinutes())
+  const second = padDatePart(date.getSeconds())
+  return `${year}-${month}-${day} ${hour}:${minute}:${second}`
+}
+
+function formatDateText(value: string | null | undefined): string | null {
+  const text = value?.trim()
+  if (!text) {
+    return null
+  }
+  const fixedFormat = text.match(/^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2}):(\d{2})/)
+  if (fixedFormat) {
+    return `${fixedFormat[1]}-${fixedFormat[2]}-${fixedFormat[3]} ${fixedFormat[4]}:${fixedFormat[5]}:${fixedFormat[6]}`
+  }
+  const parsed = Date.parse(text)
+  if (!Number.isNaN(parsed)) {
+    return formatDateTime(parsed)
+  }
+  return text
+}
+
+function padDatePart(value: number): string {
+  return value.toString().padStart(2, "0")
+}
+
+function openVPNInnerAddresses(client: OpenVPNClientConnection): string[] {
+  return [client.virtualAddress, client.virtualIpv6Address].filter((value): value is string => Boolean(value))
+}
+
+function formatPublicAddress(client: OpenVPNClientConnection): string {
+  if (client.publicIp && client.publicPort != null) {
+    return `${client.publicIp}:${client.publicPort}`
+  }
+  return client.publicIp ?? client.realAddress ?? "-"
 }
 
 function formatLogCommand(record: LogRecord): string {
@@ -3212,6 +3678,20 @@ function formatLogMessage(record: LogRecord): string {
     return `${record.errorType}: ${record.message}`
   }
   return record.message ?? "-"
+}
+
+async function saveDashboardState(
+  dashboards: MonitorDashboard[],
+  activeDashboardId: string,
+): Promise<DashboardStatePayload> {
+  return apiJson<DashboardStatePayload>("/api/monitor/dashboards", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      dashboards,
+      activeDashboardId: activeDashboardId || null,
+    }),
+  })
 }
 
 async function apiJson<T = unknown>(input: RequestInfo | URL, init?: RequestInit): Promise<T> {
@@ -3284,6 +3764,20 @@ function dashboardIdFromPath(pathname: string): string | null {
   const normalized = pathname.replace(/\/+$/, "") || "/"
   const match = normalized.match(/^\/monitor\/dashboard\/([^/]+)$/)
   return match ? decodeURIComponent(match[1]) : null
+}
+
+function monitorTabFromPath(pathname: string): MonitorTabKind {
+  const normalized = pathname.replace(/\/+$/, "") || "/"
+  if (dashboardIdFromPath(normalized)) {
+    return "dashboard"
+  }
+  if (normalized === "/monitor/devices") {
+    return "devices"
+  }
+  if (normalized === "/monitor/openvpn-clients") {
+    return "openvpnClients"
+  }
+  return "overview"
 }
 
 function dashboardPath(dashboardId: string): string {
