@@ -1240,12 +1240,13 @@ def _render_openvpn_up_script(
         lines.append(f'ip link set dev "$IFACE" group {devgroups[config.devgroup]}')
     if config.up:
         lines.append(f"sh -c {shlex.quote(config.up)}")
+    lines.append('/usr/local/bin/gw hook route-refresh "$IFACE" --verbose 0 || true')
     lines.append("")
     return "\n".join(lines)
 
 
-def _openvpn_needs_up_script(config: InterfaceConfig) -> bool:
-    return bool(config.devgroup or config.up)
+def _openvpn_needs_up_script(_config: InterfaceConfig) -> bool:
+    return True
 
 
 def _openvpn_config_path(name: str) -> str:

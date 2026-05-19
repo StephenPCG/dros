@@ -639,8 +639,9 @@ OpenVPN 前检查该文件可读，并追加 `--crl-verify <crlFile>`。
 
 仅 `type: openvpn` 使用。可选单行 shell 命令。
 
-如果设置了 `devGroup` 或 `up`，DROS 会生成 `/etc/dros/openvpn/<name>.up`。该脚本会在
-OpenVPN 设备出现后先设置 `devGroup`，然后执行 `up` 命令。
+DROS 总会生成 `/etc/dros/openvpn/<name>.up`，并作为 OpenVPN 的 `--up` 脚本使用。
+该脚本会在 OpenVPN 设备出现后先设置 `devGroup`，然后执行 `up` 命令，最后入队
+`route-refresh` 事件，让 daemon 在隧道 ready 后刷新路由。
 
 默认值：无。
 

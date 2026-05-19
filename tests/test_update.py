@@ -1457,6 +1457,7 @@ spec:
     assert 'IFACE="ovpn-lab"\n' in up
     assert 'ip link set dev "$IFACE" group 9\n' in up
     assert "sh -c 'echo openvpn-up'\n" in up
+    assert '/usr/local/bin/gw hook route-refresh "$IFACE" --verbose 0 || true\n' in up
 
 
 def test_update_interface_openvpn_can_read_relative_config_file(tmp_path: Path) -> None:
@@ -1484,6 +1485,37 @@ spec:
         encoding="utf-8"
     )
     assert ovpn == "client\nremote vpn.example.net 1194\n"
+
+
+def test_update_interface_openvpn_writes_route_refresh_up_script_by_default(
+    tmp_path: Path,
+) -> None:
+    settings = _settings(tmp_path)
+    settings.paths.configs.mkdir(parents=True)
+    (settings.paths.configs / "client.conf").write_text(
+        "client\nremote vpn.example.net 1194\n",
+        encoding="utf-8",
+    )
+    (settings.paths.configs / "openvpn.yaml").write_text(
+        """
+kind: Interface
+metadata:
+  name: ovpn-client
+spec:
+  type: openvpn
+  configFile: client.conf
+""".lstrip(),
+        encoding="utf-8",
+    )
+
+    run_update(settings, target="iface/ovpn-client", console=_console(StringIO()))
+
+    iface = _interface_file(settings, "ovpn-client").read_text(encoding="utf-8")
+    up = (settings.sys_root / "etc/dros/openvpn/ovpn-client.up").read_text(
+        encoding="utf-8"
+    )
+    assert "/etc/dros/openvpn/ovpn-client.up" in iface
+    assert '/usr/local/bin/gw hook route-refresh "$IFACE" --verbose 0 || true\n' in up
 
 
 def test_update_interface_openvpn_appends_extra_config_lines_to_config_file(
