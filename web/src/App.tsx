@@ -52,7 +52,8 @@ type MonitorTabKind = "overview" | "devices" | "openvpnClients" | "dashboard"
 type LogsViewId = "invocations" | "errors"
 type Theme = "light" | "dark"
 type OpenVPNProfileKind = "server" | "client"
-type DashboardChartType = "bandwidth" | "ping"
+type MetricChartType = "cpu" | "memory" | "load" | "disk" | "df" | "conntrack" | "contextswitch" | "irq"
+type DashboardChartType = "bandwidth" | "ping" | MetricChartType
 
 type OpenVPNInstance = {
   name: string
@@ -152,6 +153,10 @@ type MonitorRrdTargets = {
     hasLatency: boolean
     hasLoss: boolean
   }>
+  metrics?: Partial<Record<MetricChartType, Array<{
+    name: string
+    series: string[]
+  }>>>
 }
 
 type BandwidthPoint = {
@@ -181,6 +186,20 @@ type PingSeries = {
   points: PingPoint[]
 }
 
+type MetricPoint = {
+  timestamp: number
+  values: Record<string, number | null>
+}
+
+type MetricSeries = {
+  kind: MetricChartType
+  target: string
+  timespan: string
+  unit: string
+  labels: string[]
+  points: MetricPoint[]
+}
+
 type DashboardChart = {
   id: string
   type: DashboardChartType
@@ -201,7 +220,7 @@ type DashboardStatePayload = {
   activeDashboardId: string | null
 }
 
-type DashboardChartSeries = BandwidthSeries | PingSeries
+type DashboardChartSeries = BandwidthSeries | PingSeries | MetricSeries
 
 type AddChartForm = {
   type: DashboardChartType
@@ -257,6 +276,39 @@ const DASHBOARD_LAYOUT_VERSION = 2
 const DASHBOARD_BREAKPOINTS = { lg: 1100, md: 760, sm: 0 }
 const DASHBOARD_COLUMNS = { lg: 12, md: 8, sm: 4 }
 const LEGACY_DASHBOARD_COLUMNS = { lg: 3, md: 2, sm: 1 }
+const METRIC_CHART_TYPES = ["cpu", "memory", "load", "disk", "df", "conntrack", "contextswitch", "irq"] as const
+const DASHBOARD_CHART_TYPE_LABELS: Record<DashboardChartType, string> = {
+  bandwidth: "带宽",
+  ping: "Ping",
+  cpu: "CPU",
+  memory: "内存",
+  load: "Load",
+  disk: "Disk IO",
+  df: "DF",
+  conntrack: "Conntrack",
+  contextswitch: "Context Switch",
+  irq: "IRQ",
+}
+const METRIC_COLORS = [
+  "#2563eb",
+  "#16a34a",
+  "#dc2626",
+  "#9333ea",
+  "#ea580c",
+  "#0891b2",
+  "#be123c",
+  "#4f46e5",
+]
+const METRIC_COLOR_CLASSES = [
+  "bg-blue-600",
+  "bg-green-600",
+  "bg-red-600",
+  "bg-purple-600",
+  "bg-orange-600",
+  "bg-cyan-600",
+  "bg-rose-700",
+  "bg-indigo-600",
+]
 const DEFAULT_TIMESPANS: MonitorTimespan[] = [
   { id: "1h", label: "1h", seconds: 60 * 60 },
   { id: "4h", label: "4h", seconds: 4 * 60 * 60 },
@@ -781,10 +833,7 @@ function MonitorPage() {
               target: chart.target,
               timespan: activeDashboard.timespan,
             })
-            const path =
-              chart.type === "bandwidth"
-                ? `/api/monitor/rrd/bandwidth?${params}`
-                : `/api/monitor/rrd/ping?${params}`
+            const path = dashboardChartSeriesPath(chart, params)
             const data = await apiJson<DashboardChartSeries>(path)
             return [chart.id, data] as const
           }),
@@ -1114,25 +1163,26 @@ function AddDashboardChartModal({
 }) {
   const bandwidthTargets = targets?.bandwidth.map((item) => item.name) ?? []
   const pingTargets = targets?.ping.map((item) => item.name) ?? []
-  const initialType: DashboardChartType = bandwidthTargets.length > 0 ? "bandwidth" : "ping"
+  const chartTypes = availableChartTypes(targets)
+  const initialType: DashboardChartType = chartTypes[0] ?? "bandwidth"
   const [form, setForm] = useState<AddChartForm>({
     type: initialType,
-    target: (initialType === "bandwidth" ? bandwidthTargets[0] : pingTargets[0]) ?? "",
+    target: dashboardTargetsForType(targets, initialType)[0] ?? "",
   })
-  const options = form.type === "bandwidth" ? bandwidthTargets : pingTargets
+  const options = dashboardTargetsForType(targets, form.type)
 
   useEffect(() => {
     setForm((current) => {
-      const available = current.type === "bandwidth" ? bandwidthTargets : pingTargets
+      const available = dashboardTargetsForType(targets, current.type)
       if (available.includes(current.target)) {
         return current
       }
       return { ...current, target: available[0] ?? "" }
     })
-  }, [bandwidthTargets.join("|"), pingTargets.join("|")])
+  }, [bandwidthTargets.join("|"), pingTargets.join("|"), metricTargetsKey(targets)])
 
   function setType(type: DashboardChartType) {
-    const nextTargets = type === "bandwidth" ? bandwidthTargets : pingTargets
+    const nextTargets = dashboardTargetsForType(targets, type)
     setForm({ type, target: nextTargets[0] ?? "" })
   }
 
@@ -1144,8 +1194,8 @@ function AddDashboardChartModal({
   return (
     <Modal title="添加图表" onClose={onClose}>
       <form className="space-y-4" onSubmit={handleSubmit}>
-        <div className="grid grid-cols-2 gap-2">
-          {(["bandwidth", "ping"] as const).map((type) => (
+        <div className="grid grid-cols-2 gap-2 md:grid-cols-4">
+          {chartTypes.map((type) => (
             <button
               key={type}
               className={cn(
@@ -1157,12 +1207,12 @@ function AddDashboardChartModal({
               type="button"
               onClick={() => setType(type)}
             >
-              {type === "bandwidth" ? "带宽" : "Ping"}
+              {DASHBOARD_CHART_TYPE_LABELS[type]}
             </button>
           ))}
         </div>
         <label className="block space-y-2">
-          <span className="text-sm font-medium">{form.type === "bandwidth" ? "接口" : "目标"}</span>
+          <span className="text-sm font-medium">{dashboardTargetLabel(form.type)}</span>
           <select
             className="h-10 w-full rounded-md border bg-background px-3 text-sm outline-none transition-colors focus:border-ring focus:ring-2 focus:ring-ring/20"
             value={form.target}
@@ -1236,6 +1286,7 @@ function DashboardGrid({
                 chart={chart}
                 series={series[chart.id]}
                 timespan={dashboard.timespan}
+                groupId={`dashboard-${dashboard.id}`}
                 onRemove={() => onRemoveChart(chart.id)}
               />
             </div>
@@ -1254,16 +1305,19 @@ function DashboardChartCard({
   chart,
   series,
   timespan,
+  groupId,
   onRemove,
 }: {
   chart: DashboardChart
   series?: DashboardChartSeries
   timespan: string
+  groupId: string
   onRemove: () => void
 }) {
-  const title = chart.type === "bandwidth" ? `带宽 · ${chart.target}` : `Ping · ${chart.target}`
+  const title = `${DASHBOARD_CHART_TYPE_LABELS[chart.type]} · ${chart.target}`
   const bandwidthSeries = chart.type === "bandwidth" ? (series as BandwidthSeries | undefined) : undefined
   const pingSeries = chart.type === "ping" ? (series as PingSeries | undefined) : undefined
+  const metricSeries = isMetricChartType(chart.type) ? (series as MetricSeries | undefined) : undefined
   return (
     <div className="flex h-full min-h-0 flex-col overflow-hidden rounded-md border bg-background shadow-sm">
       <div className="dashboard-drag-handle flex cursor-move items-center justify-between gap-3 border-b px-3 py-2">
@@ -1281,28 +1335,42 @@ function DashboardChartCard({
       <div className="flex min-h-0 flex-1 flex-col gap-2 p-2">
         <div className="min-h-0 flex-1">
           {chart.type === "bandwidth" ? (
-            <EChartPanel option={bandwidthChartOption(bandwidthSeries)} />
+            <EChartPanel option={bandwidthChartOption(bandwidthSeries)} groupId={groupId} />
+          ) : chart.type === "ping" ? (
+            <EChartPanel option={pingChartOption(pingSeries)} groupId={groupId} />
           ) : (
-            <EChartPanel option={pingChartOption(pingSeries)} />
+            <EChartPanel option={metricChartOption(metricSeries)} groupId={groupId} />
           )}
         </div>
         {chart.type === "bandwidth" ? (
           <BandwidthStats series={bandwidthSeries} />
-        ) : (
+        ) : chart.type === "ping" ? (
           <PingStats series={pingSeries} />
+        ) : (
+          <MetricStats series={metricSeries} />
         )}
       </div>
     </div>
   )
 }
 
-function EChartPanel({ option }: { option: EChartsOption }) {
+function EChartPanel({ option, groupId }: { option: EChartsOption; groupId?: string }) {
+  function handleChartReady(instance: unknown) {
+    if (!groupId) {
+      return
+    }
+    const chart = instance as { group?: string }
+    chart.group = groupId
+    echarts.connect(groupId)
+  }
+
   return (
     <ReactEChartsCore
       echarts={echarts}
       option={option}
       notMerge
       lazyUpdate
+      onChartReady={handleChartReady}
       style={{ height: "100%", minHeight: 220, width: "100%" }}
       opts={{ renderer: "canvas" }}
     />
@@ -1361,6 +1429,20 @@ function PingStats({ series }: { series?: PingSeries }) {
   )
 }
 
+function MetricStats({ series }: { series?: MetricSeries }) {
+  return (
+    <ChartStatsTable
+      labelHeader="指标"
+      rows={(series?.labels ?? []).map((label) => ({
+        label,
+        colorClassName: metricSeriesColorClass(series, label),
+        stats: numericStats(series?.points.map((point) => point.values[label]) ?? []),
+        formatter: (value) => formatMetricValue(value, series?.unit ?? ""),
+      }))}
+    />
+  )
+}
+
 function ChartStatsTable({
   labelHeader,
   rows,
@@ -1408,6 +1490,57 @@ function ChartStatsTable({
       </table>
     </div>
   )
+}
+
+function metricChartOption(series?: MetricSeries): EChartsOption {
+  const points = series?.points ?? []
+  const labels = metricChartPlotLabels(series)
+  const unit = series?.unit ?? ""
+  const stacked = isStackedMetricAreaChart(series)
+  return baseChartOption({
+    emptyText: "暂无指标数据",
+    legend: labels,
+    colors: labels.map((_, index) => METRIC_COLORS[index % METRIC_COLORS.length]),
+    yAxis: [
+      {
+        type: "value",
+        name: unit,
+        axisLabel: { formatter: (value: number) => formatMetricValue(value, unit), color: "#64748b" },
+        splitLine: { lineStyle: { color: "rgba(148, 163, 184, 0.22)" } },
+      },
+    ],
+    series: labels.map((label, index) => {
+      const color = METRIC_COLORS[index % METRIC_COLORS.length]
+      return {
+        name: label,
+        type: "line",
+        smooth: false,
+        showSymbol: false,
+        sampling: "lttb",
+        stack: stacked ? "total" : undefined,
+        data: points.map((point) => [point.timestamp * 1000, point.values[label]]),
+        lineStyle: { width: 2, color },
+        itemStyle: { color },
+        areaStyle: stacked ? { opacity: 0.18 } : undefined,
+      }
+    }),
+  })
+}
+
+function metricChartPlotLabels(series?: MetricSeries): string[] {
+  const labels = series?.labels ?? []
+  if (isStackedMetricAreaChart(series)) {
+    return labels.filter((label) => !isHiddenMetricPlotLabel(series, label))
+  }
+  return labels
+}
+
+function isStackedMetricAreaChart(series?: MetricSeries): boolean {
+  return series?.kind === "memory" || series?.kind === "df"
+}
+
+function isHiddenMetricPlotLabel(series: MetricSeries | undefined, label: string): boolean {
+  return isStackedMetricAreaChart(series) && label === "free"
 }
 
 function bandwidthChartOption(series?: BandwidthSeries): EChartsOption {
@@ -1500,18 +1633,20 @@ function pingChartOption(series?: PingSeries): EChartsOption {
 function baseChartOption({
   emptyText,
   legend,
+  colors,
   yAxis,
   series,
 }: {
   emptyText: string
   legend: string[]
+  colors?: string[]
   yAxis: EChartsOption["yAxis"]
   series: EChartsOption["series"]
 }): EChartsOption {
   return {
     animation: false,
     backgroundColor: "transparent",
-    color: ["#2563eb", "#dc2626"],
+    color: colors ?? ["#2563eb", "#dc2626"],
     grid: { left: 66, right: Array.isArray(yAxis) && yAxis.length > 1 ? 58 : 22, top: 40, bottom: 48 },
     legend: {
       data: legend,
@@ -1526,10 +1661,10 @@ function baseChartOption({
       confine: true,
       formatter: (params: unknown) => chartTooltipFormatter(params),
       axisPointer: {
-        type: "cross",
-        label: {
-          backgroundColor: "#0f172a",
-        },
+        type: "line",
+        axis: "x",
+        label: { show: false },
+        lineStyle: { color: "rgba(148, 163, 184, 0.75)", type: "dashed", width: 1 },
       },
     },
     xAxis: {
@@ -3236,6 +3371,62 @@ function fileName(path: string): string {
   return path.split("/").pop() || path
 }
 
+function availableChartTypes(targets: MonitorRrdTargets | null): DashboardChartType[] {
+  const types: DashboardChartType[] = []
+  if ((targets?.bandwidth.length ?? 0) > 0) {
+    types.push("bandwidth")
+  }
+  if ((targets?.ping.length ?? 0) > 0) {
+    types.push("ping")
+  }
+  for (const type of METRIC_CHART_TYPES) {
+    if ((targets?.metrics?.[type]?.length ?? 0) > 0) {
+      types.push(type)
+    }
+  }
+  return types.length > 0 ? types : ["bandwidth", "ping", ...METRIC_CHART_TYPES]
+}
+
+function dashboardTargetsForType(
+  targets: MonitorRrdTargets | null,
+  type: DashboardChartType,
+): string[] {
+  if (type === "bandwidth") {
+    return targets?.bandwidth.map((item) => item.name) ?? []
+  }
+  if (type === "ping") {
+    return targets?.ping.map((item) => item.name) ?? []
+  }
+  return targets?.metrics?.[type]?.map((item) => item.name) ?? []
+}
+
+function metricTargetsKey(targets: MonitorRrdTargets | null): string {
+  return METRIC_CHART_TYPES.map((type) =>
+    `${type}:${dashboardTargetsForType(targets, type).join(",")}`,
+  ).join("|")
+}
+
+function dashboardTargetLabel(type: DashboardChartType): string {
+  if (type === "bandwidth") {
+    return "接口"
+  }
+  if (type === "ping") {
+    return "目标"
+  }
+  return "对象"
+}
+
+function dashboardChartSeriesPath(chart: DashboardChart, params: URLSearchParams): string {
+  if (chart.type === "bandwidth") {
+    return `/api/monitor/rrd/bandwidth?${params}`
+  }
+  if (chart.type === "ping") {
+    return `/api/monitor/rrd/ping?${params}`
+  }
+  params.set("kind", chart.type)
+  return `/api/monitor/rrd/metric?${params}`
+}
+
 function loadBrowserDashboardState(): DashboardStatePayload | null {
   try {
     const raw = window.localStorage.getItem(DASHBOARD_STORAGE_KEY)
@@ -3303,9 +3494,18 @@ function isDashboardChart(value: unknown): value is DashboardChart {
   const raw = value as Partial<DashboardChart>
   return (
     typeof raw.id === "string" &&
-    (raw.type === "bandwidth" || raw.type === "ping") &&
+    typeof raw.type === "string" &&
+    isDashboardChartType(raw.type) &&
     typeof raw.target === "string"
   )
+}
+
+function isDashboardChartType(value: string): value is DashboardChartType {
+  return value === "bandwidth" || value === "ping" || isMetricChartType(value)
+}
+
+function isMetricChartType(value: string): value is MetricChartType {
+  return (METRIC_CHART_TYPES as readonly string[]).includes(value)
 }
 
 function createDashboard(name: string): MonitorDashboard {
@@ -3571,6 +3771,36 @@ function formatPercent(value: number): string {
   return `${value.toFixed(1)}%`
 }
 
+function formatMetricValue(value: number, unit: string): string {
+  if (unit === "%") {
+    return formatPercent(value)
+  }
+  if (unit === "B") {
+    return formatBytes(value)
+  }
+  if (unit === "B/s") {
+    return `${formatBytes(value)}/s`
+  }
+  if (unit === "bit/s") {
+    return formatBitRate(value)
+  }
+  if (unit === "/s") {
+    return `${formatNumber(value)}/s`
+  }
+  return unit ? `${formatNumber(value)} ${unit}` : formatNumber(value)
+}
+
+function formatNumber(value: number): string {
+  const abs = Math.abs(value)
+  if (abs >= 1000) {
+    return Math.round(value).toString()
+  }
+  if (abs >= 10) {
+    return value.toFixed(1)
+  }
+  return value.toFixed(2)
+}
+
 function formatBitRate(bitsPerSecond: number): string {
   const units = ["bps", "Kbps", "Mbps", "Gbps", "Tbps"]
   let value = bitsPerSecond
@@ -3581,6 +3811,18 @@ function formatBitRate(bitsPerSecond: number): string {
     value /= 1000
   }
   return `${Math.round(bitsPerSecond)} bps`
+}
+
+function metricColorClass(index: number): string {
+  return METRIC_COLOR_CLASSES[index % METRIC_COLOR_CLASSES.length]
+}
+
+function metricSeriesColorClass(series: MetricSeries | undefined, label: string): string {
+  if (isHiddenMetricPlotLabel(series, label)) {
+    return "bg-muted-foreground"
+  }
+  const colorIndex = metricChartPlotLabels(series).indexOf(label)
+  return metricColorClass(colorIndex >= 0 ? colorIndex : 0)
 }
 
 function formatChartTime(timestamp: number): string {

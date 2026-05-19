@@ -31,7 +31,7 @@ from dros.web.monitor import (
     collect_network_devices,
     collect_openvpn_clients,
 )
-from dros.web.rrd import collect_bandwidth_series, collect_ping_series, collect_rrd_targets
+from dros.web.rrd import collect_bandwidth_series, collect_metric_series, collect_ping_series, collect_rrd_targets
 
 
 class LoginRequest(BaseModel):
@@ -180,6 +180,18 @@ def create_app(settings: DrosSettings | None = None) -> FastAPI:
     ) -> dict[str, object]:
         try:
             return collect_ping_series(settings, target=target, timespan=timespan)
+        except ValueError as exc:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+    @api.get("/api/monitor/rrd/metric")
+    def monitor_rrd_metric(
+        kind: str,
+        target: str,
+        timespan: str = "1h",
+        _username: str = Depends(require_auth),
+    ) -> dict[str, object]:
+        try:
+            return collect_metric_series(settings, kind=kind, target=target, timespan=timespan)
         except ValueError as exc:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 

@@ -7,7 +7,7 @@ from fastapi.testclient import TestClient
 from dros.settings import DrosPaths, DrosSettings, WebSettings
 from dros.web.app import create_app
 from dros.web.auth import WebAuthStore
-from dros.web.rrd import collect_bandwidth_series, collect_ping_series
+from dros.web.rrd import collect_bandwidth_series, collect_metric_series, collect_ping_series
 
 
 def test_web_health_endpoint() -> None:
@@ -63,6 +63,24 @@ def test_web_frontend_dashboard_uses_server_storage_and_fixed_datetime_format() 
     assert "function formatDateTime" in source
     assert ".toLocaleString(" not in source
     assert ".toLocaleDateString(" not in source
+
+
+def test_web_frontend_dashboard_supports_metric_charts_and_vertical_shared_crosshair() -> None:
+    source = (Path(__file__).resolve().parents[1] / "web/src/App.tsx").read_text(encoding="utf-8")
+
+    assert '"cpu", "memory", "load", "disk", "df", "conntrack", "contextswitch", "irq"' in source
+    assert "/api/monitor/rrd/metric" in source
+    assert "metricChartOption" in source
+    assert "metricChartPlotLabels" in source
+    assert "metricSeriesColorClass(series, label)" in source
+    assert "isHiddenMetricPlotLabel(series, label)" in source
+    assert 'label === "free"' in source
+    assert 'type: "line",' in source
+    assert 'stack: stacked ? "total" : undefined' in source
+    assert "areaStyle: stacked" in source
+    assert 'axis: "x",' in source
+    assert 'type: "cross"' not in source
+    assert "echarts.connect(groupId)" in source
 
 
 def test_web_monitor_summary_requires_auth_and_reports_system_counters(tmp_path: Path) -> None:
@@ -327,10 +345,28 @@ spec:
     (rrd_root / "interface-eth0").mkdir(parents=True)
     (rrd_root / "interface-br0").mkdir(parents=True)
     (rrd_root / "ping").mkdir(parents=True)
+    (rrd_root / "cpu-0").mkdir(parents=True)
+    (rrd_root / "memory").mkdir(parents=True)
+    (rrd_root / "load").mkdir(parents=True)
+    (rrd_root / "disk-sda").mkdir(parents=True)
+    (rrd_root / "df-root").mkdir(parents=True)
+    (rrd_root / "conntrack").mkdir(parents=True)
+    (rrd_root / "contextswitch").mkdir(parents=True)
+    (rrd_root / "irq").mkdir(parents=True)
     (rrd_root / "interface-eth0/if_octets.rrd").touch()
     (rrd_root / "interface-br0/if_octets.rrd").touch()
     (rrd_root / "ping/ping-1.1.1.1.rrd").touch()
     (rrd_root / "ping/ping_droprate-1.1.1.1.rrd").touch()
+    (rrd_root / "cpu-0/cpu-user.rrd").touch()
+    (rrd_root / "memory/percent-used.rrd").touch()
+    (rrd_root / "memory/percent-free.rrd").touch()
+    (rrd_root / "load/load.rrd").touch()
+    (rrd_root / "disk-sda/disk_octets.rrd").touch()
+    (rrd_root / "df-root/percent_bytes-used.rrd").touch()
+    (rrd_root / "df-root/percent_bytes-free.rrd").touch()
+    (rrd_root / "conntrack/conntrack.rrd").touch()
+    (rrd_root / "contextswitch/contextswitch.rrd").touch()
+    (rrd_root / "irq/irq-16.rrd").touch()
     settings = DrosSettings(
         sysRoot=sysroot,
         paths=DrosPaths(configs=configs),
@@ -364,6 +400,19 @@ spec:
         {"name": "1.1.1.1", "hasLatency": True, "hasLoss": True},
         {"name": "9.9.9.9", "hasLatency": False, "hasLoss": False},
     ]
+    assert payload["metrics"] == {
+        "conntrack": [{"name": "system", "series": ["conntrack"]}],
+        "contextswitch": [{"name": "system", "series": ["contextswitch"]}],
+        "cpu": [
+            {"name": "all", "series": ["user"]},
+            {"name": "0", "series": ["user"]},
+        ],
+        "df": [{"name": "root", "series": ["used", "free"]}],
+        "disk": [{"name": "sda", "series": ["read", "write"]}],
+        "irq": [{"name": "16", "series": ["irq"]}],
+        "load": [{"name": "system", "series": ["1m", "5m", "15m"]}],
+        "memory": [{"name": "system", "series": ["used", "free"]}],
+    }
 
 
 def test_collect_bandwidth_series_fetches_rrd_points(tmp_path: Path) -> None:
@@ -432,3 +481,50 @@ def test_collect_ping_series_fetches_latency_and_loss_points(tmp_path: Path) -> 
         {"timestamp": 1700000000, "latencyMs": 12.0, "lossPercent": 0.0},
         {"timestamp": 1700000010, "latencyMs": 15.0, "lossPercent": 25.0},
     ]
+
+
+def test_collect_metric_series_fetches_load_and_aggregates_cpu_points(tmp_path: Path) -> None:
+    sysroot = tmp_path / "sysroot"
+    load = sysroot / "var/lib/collectd/rrd/gateway/load/load.rrd"
+    cpu0 = sysroot / "var/lib/collectd/rrd/gateway/cpu-0/cpu-user.rrd"
+    cpu1 = sysroot / "var/lib/collectd/rrd/gateway/cpu-1/cpu-user.rrd"
+    for path in [load, cpu0, cpu1]:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.touch()
+    settings = DrosSettings(sysRoot=sysroot, paths=DrosPaths(configs=tmp_path / "configs"))
+
+    def runner(command: list[str]) -> str:
+        if command[2] == str(load):
+            return """
+                       shortterm       midterm        longterm
+1700000000: 1.000000e-01 2.000000e-01 3.000000e-01
+"""
+        if command[2] == str(cpu0):
+            return """
+                           value
+1700000000: 1.000000e+01
+"""
+        return """
+                           value
+1700000000: 3.000000e+01
+"""
+
+    load_payload = collect_metric_series(settings, kind="load", target="system", timespan="1h", runner=runner)
+    cpu_payload = collect_metric_series(settings, kind="cpu", target="all", timespan="1h", runner=runner)
+
+    assert load_payload == {
+        "kind": "load",
+        "target": "system",
+        "timespan": "1h",
+        "unit": "",
+        "labels": ["1m", "5m", "15m"],
+        "points": [{"timestamp": 1700000000, "values": {"1m": 0.1, "5m": 0.2, "15m": 0.3}}],
+    }
+    assert cpu_payload == {
+        "kind": "cpu",
+        "target": "all",
+        "timespan": "1h",
+        "unit": "%",
+        "labels": ["user"],
+        "points": [{"timestamp": 1700000000, "values": {"user": 20.0}}],
+    }

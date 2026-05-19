@@ -24,12 +24,33 @@ RrdRunner = Callable[[list[str]], str]
 
 
 @dataclass(frozen=True)
+class MetricSource:
+    path: Path
+    ds: str
+    fallback_index: int = 0
+    scale: float = 1.0
+
+
+@dataclass(frozen=True)
 class RrdFileSet:
     root: Path
     bandwidth: dict[str, Path]
     ping_latency: dict[str, Path]
     ping_loss: dict[str, Path]
     configured_ping_hosts: list[str]
+    metrics: dict[str, dict[str, dict[str, list[MetricSource]]]]
+
+
+METRIC_KINDS = (
+    "cpu",
+    "memory",
+    "load",
+    "disk",
+    "df",
+    "conntrack",
+    "contextswitch",
+    "irq",
+)
 
 
 def collect_rrd_targets(settings: DrosSettings) -> dict[str, Any]:
@@ -58,6 +79,13 @@ def collect_rrd_targets(settings: DrosSettings) -> dict[str, Any]:
             }
             for name in ping_names
         ],
+        "metrics": {
+            kind: [
+                {"name": target, "series": sorted(series, key=_metric_label_sort_key)}
+                for target, series in sorted(targets.items(), key=lambda item: _metric_target_sort_key(kind, item[0]))
+            ]
+            for kind, targets in sorted(files.metrics.items())
+        },
     }
 
 
@@ -129,12 +157,51 @@ def collect_ping_series(
     }
 
 
+def collect_metric_series(
+    settings: DrosSettings,
+    *,
+    kind: str,
+    target: str,
+    timespan: str,
+    runner: RrdRunner | None = None,
+) -> dict[str, Any]:
+    if kind not in METRIC_KINDS:
+        raise ValueError(f"unsupported metric kind: {kind}")
+    seconds = _timespan_seconds(timespan)
+    files = _rrd_files(settings)
+    series_sources = files.metrics.get(kind, {}).get(target, {})
+    labels = sorted(series_sources, key=_metric_label_sort_key)
+    series_values = {
+        label: _combined_metric_source_rows(sources, seconds, runner)
+        for label, sources in series_sources.items()
+    }
+    timestamps = sorted({timestamp for values in series_values.values() for timestamp in values})
+    return {
+        "kind": kind,
+        "target": target,
+        "timespan": timespan,
+        "unit": _metric_unit(kind, series_sources),
+        "labels": labels,
+        "points": [
+            {
+                "timestamp": timestamp,
+                "values": {
+                    label: series_values.get(label, {}).get(timestamp)
+                    for label in labels
+                },
+            }
+            for timestamp in timestamps
+        ],
+    }
+
+
 def _rrd_files(settings: DrosSettings) -> RrdFileSet:
     config = _collectd_config(settings)
     root = _target_path(settings, Path(config.rrd_dir))
     bandwidth: dict[str, Path] = {}
     ping_latency: dict[str, Path] = {}
     ping_loss: dict[str, Path] = {}
+    metrics: dict[str, dict[str, dict[str, list[MetricSource]]]] = {}
     if root.exists():
         for path in root.glob("*/interface-*/if_octets.rrd"):
             name = path.parent.name.removeprefix("interface-")
@@ -154,13 +221,112 @@ def _rrd_files(settings: DrosSettings) -> RrdFileSet:
         for path in root.glob("ping/ping_droprate-*.rrd"):
             name = path.stem.removeprefix("ping_droprate-")
             ping_loss.setdefault(name, path)
+        _scan_collectd_metrics(root, metrics)
     return RrdFileSet(
         root=root,
         bandwidth=bandwidth,
         ping_latency=ping_latency,
         ping_loss=ping_loss,
         configured_ping_hosts=list(config.plugins.ping.hosts),
+        metrics=metrics,
     )
+
+
+def _scan_collectd_metrics(
+    root: Path,
+    metrics: dict[str, dict[str, dict[str, list[MetricSource]]]],
+) -> None:
+    for path in _iter_rrd_paths(root, "cpu-*/cpu-*.rrd"):
+        cpu = path.parent.name.removeprefix("cpu-")
+        state = path.stem.removeprefix("cpu-")
+        source = MetricSource(path=path, ds="value")
+        _add_metric(metrics, "cpu", cpu, state, source)
+        _add_metric(metrics, "cpu", "all", state, source)
+
+    memory_percent = list(_iter_rrd_paths(root, "memory/percent-*.rrd"))
+    memory_paths = memory_percent or list(_iter_rrd_paths(root, "memory/memory-*.rrd"))
+    for path in memory_paths:
+        prefix = "percent-" if path in memory_percent else "memory-"
+        _add_metric(
+            metrics,
+            "memory",
+            "system",
+            path.stem.removeprefix(prefix),
+            MetricSource(path=path, ds="value"),
+        )
+
+    for path in _iter_rrd_paths(root, "load/load.rrd"):
+        _add_metric(metrics, "load", "system", "1m", MetricSource(path=path, ds="shortterm", fallback_index=0))
+        _add_metric(metrics, "load", "system", "5m", MetricSource(path=path, ds="midterm", fallback_index=1))
+        _add_metric(metrics, "load", "system", "15m", MetricSource(path=path, ds="longterm", fallback_index=2))
+
+    for path in _iter_rrd_paths(root, "disk-*/disk_octets.rrd"):
+        target = path.parent.name.removeprefix("disk-")
+        _add_metric(metrics, "disk", target, "read", MetricSource(path=path, ds="read", fallback_index=0))
+        _add_metric(metrics, "disk", target, "write", MetricSource(path=path, ds="write", fallback_index=1))
+
+    df_percent = list(_iter_rrd_paths(root, "df-*/percent_bytes-*.rrd"))
+    df_percent_targets = {path.parent.name for path in df_percent}
+    for path in df_percent:
+        target = path.parent.name.removeprefix("df-")
+        label = path.stem.removeprefix("percent_bytes-")
+        _add_metric(metrics, "df", target, label, MetricSource(path=path, ds="value"))
+    for path in _iter_rrd_paths(root, "df-*/df_complex-*.rrd"):
+        if path.parent.name in df_percent_targets:
+            continue
+        target = path.parent.name.removeprefix("df-")
+        label = path.stem.removeprefix("df_complex-")
+        _add_metric(metrics, "df", target, label, MetricSource(path=path, ds="value"))
+
+    for path in _iter_rrd_paths(root, "conntrack/conntrack.rrd"):
+        _add_metric(metrics, "conntrack", "system", "conntrack", MetricSource(path=path, ds="value"))
+
+    for path in _iter_rrd_paths(root, "contextswitch/contextswitch.rrd"):
+        _add_metric(metrics, "contextswitch", "system", "contextswitch", MetricSource(path=path, ds="value"))
+
+    for path in _iter_rrd_paths(root, "irq/irq-*.rrd"):
+        target = path.stem.removeprefix("irq-")
+        _add_metric(metrics, "irq", target, "irq", MetricSource(path=path, ds="value"))
+
+
+def _iter_rrd_paths(root: Path, pattern: str) -> list[Path]:
+    paths = [*root.glob(pattern), *root.glob(f"*/{pattern}")]
+    return sorted(set(paths))
+
+
+def _add_metric(
+    metrics: dict[str, dict[str, dict[str, list[MetricSource]]]],
+    kind: str,
+    target: str,
+    label: str,
+    source: MetricSource,
+) -> None:
+    metrics.setdefault(kind, {}).setdefault(target, {}).setdefault(label, []).append(source)
+
+
+def _metric_target_sort_key(kind: str, target: str) -> tuple[int, str]:
+    if kind == "cpu" and target == "all":
+        return (0, target)
+    return (1, target)
+
+
+def _metric_label_sort_key(label: str) -> tuple[int, str]:
+    order = {
+        "1m": 0,
+        "5m": 1,
+        "15m": 2,
+        "used": 10,
+        "free": 11,
+        "cached": 12,
+        "buffered": 13,
+        "read": 20,
+        "write": 21,
+        "user": 30,
+        "system": 31,
+        "idle": 32,
+        "wait": 33,
+    }
+    return (order.get(label, 100), label)
 
 
 def _collectd_config(settings: DrosSettings) -> CollectdConfig:
@@ -289,3 +455,50 @@ def _single_value_rows(
         if value is not None:
             result[row["timestamp"]] = value
     return result
+
+
+def _combined_metric_source_rows(
+    sources: list[MetricSource],
+    seconds: int,
+    runner: RrdRunner | None,
+) -> dict[int, float | None]:
+    values_by_timestamp: dict[int, list[float]] = {}
+    for source in sources:
+        for row in _fetch_rrd(source.path, seconds, runner):
+            value = _row_value(row, source.ds, fallback_index=source.fallback_index)
+            if value is None:
+                continue
+            values_by_timestamp.setdefault(row["timestamp"], []).append(value * source.scale)
+    return {
+        timestamp: sum(values) / len(values)
+        for timestamp, values in values_by_timestamp.items()
+        if values
+    }
+
+
+def _metric_unit(
+    kind: str,
+    series_sources: dict[str, list[MetricSource]],
+) -> str:
+    if kind in {"cpu", "df"}:
+        if _series_paths_have_prefix(series_sources, "percent"):
+            return "%"
+        return "B" if kind == "df" else "%"
+    if kind == "memory":
+        return "%" if _series_paths_have_prefix(series_sources, "percent") else "B"
+    if kind == "disk":
+        return "B/s"
+    if kind in {"contextswitch", "irq"}:
+        return "/s"
+    return ""
+
+
+def _series_paths_have_prefix(
+    series_sources: dict[str, list[MetricSource]],
+    prefix: str,
+) -> bool:
+    for sources in series_sources.values():
+        for source in sources:
+            if source.path.stem.startswith(prefix):
+                return True
+    return False
