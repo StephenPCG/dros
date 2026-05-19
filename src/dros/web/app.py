@@ -9,6 +9,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
+from dros.invocation_log import read_error_logs, read_invocation_logs
 from dros.ovpn import (
     create_client_profile,
     create_server_profile,
@@ -157,6 +158,20 @@ def create_app(settings: DrosSettings | None = None) -> FastAPI:
             return collect_ping_series(settings, target=target, timespan=timespan)
         except ValueError as exc:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+    @api.get("/api/logs/invocations")
+    def logs_invocations(
+        limit: int = 200,
+        _username: str = Depends(require_auth),
+    ) -> dict[str, object]:
+        return {"records": read_invocation_logs(settings, limit=limit)}
+
+    @api.get("/api/logs/errors")
+    def logs_errors(
+        limit: int = 200,
+        _username: str = Depends(require_auth),
+    ) -> dict[str, object]:
+        return {"records": read_error_logs(settings, limit=limit)}
 
     @api.get("/api/openvpn/instances/{instance}/profiles")
     def openvpn_profiles(

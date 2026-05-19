@@ -18,6 +18,7 @@ FIREWALL_PATH = "/etc/dros/nftables.d/10-firewall.nft"
 FILTER_TABLE = "dros_filter"
 ROUTE_TABLE = "dros_route"
 NAT_TABLE = "dros_nat"
+IP_PROTOCOL_SERVICES = frozenset({"gre", "esp", "ah"})
 
 
 def create_plugin() -> DrosPlugin:
@@ -556,8 +557,11 @@ def _subject_selector(context: UpdateContext, value: str, *, direction: str) -> 
 
 
 def _service_match(value: str) -> str:
+    if value in IP_PROTOCOL_SERVICES:
+        return f"meta l4proto {value}"
     if "/" not in value:
-        raise ValueError(f"service must be protocol/port, got {value!r}")
+        names = ", ".join(sorted(IP_PROTOCOL_SERVICES))
+        raise ValueError(f"service must be protocol/port or one of {names}, got {value!r}")
     proto, port = value.split("/", 1)
     if proto not in {"tcp", "udp"}:
         raise ValueError(f"service protocol must be tcp or udp, got {proto!r}")

@@ -62,14 +62,23 @@ the event against the effective ConfigObjects loaded from `paths.configs`.
 Generated hooks do not run `gw update` inline. Interface lifecycle hooks,
 including XFRM hooks rendered as `gw hook xfrm-start <name>` and
 `gw hook xfrm-stop <name>`, append events to `{paths.run}/events.jsonl`, and the
-daemon processes the queue under a single process lock. Duplicate events in the
-same daemon polling batch are coalesced by `event + iface`.
+daemon drains the current queue under the event append lock, then processes the
+batch under a single process lock and the global apply lock. Drained events are
+removed from `events.jsonl`, so daemon restarts do not replay historical hook
+events. Duplicate events in the same daemon polling batch are coalesced by
+`event + iface`, keeping the latest duplicate in that batch.
 
 Every `gw` CLI invocation that can load settings writes a JSONL trace to
 `{paths.logs}/gw-invocations.log`. Event enqueue and daemon-side event
 processing are logged there too. Config-apply paths such as `gw update`,
 `gw bootstrap`, and daemon event processing use `{paths.run}/locks/gw-apply.lock`
 so only one system apply path runs at a time.
+
+Errors are written to `{paths.logs}/gw-errors.log`. User CLI config validation
+errors are printed to stderr but are not written to the error log; other user
+CLI failures are logged. Non-CLI event processing logs every exception,
+including config loading and validation failures. The Web console exposes both
+the invocation log and the error log under the Logs page.
 
 ## ConfigObjects
 

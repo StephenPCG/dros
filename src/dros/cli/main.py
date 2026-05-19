@@ -19,11 +19,16 @@ from dros import __version__
 from dros.bootstrap import run_bootstrap
 from dros.cli.privilege import path_writable_for_current_user, reexec_with_sudo
 from dros.cli.services import restart_local_service
-from dros.config_objects import DnsmasqChinaNamesConfig, InterfaceConfig, load_config_objects
+from dros.config_objects import (
+    ConfigObjectLoadError,
+    DnsmasqChinaNamesConfig,
+    InterfaceConfig,
+    load_config_objects,
+)
 from dros.config_catalog import render_config_object_example
 from dros.dnsmasq_china_names import DnsmasqChinaNamesUpdater
 from dros.events import enqueue_event, process_event
-from dros.invocation_log import append_invocation_log
+from dros.invocation_log import append_error_log, append_invocation_log
 from dros.ip_lists import AVAILABLE_IP_LIST_SOURCES, load_ip_lists, summarize_ip_lists, update_ip_lists
 from dros.locks import APPLY_LOCK_PATH, LockBusyError, exclusive_lock
 from dros.ovpn import (
@@ -772,6 +777,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         app(args)
     except SystemExit as exc:
         exit_code = int(exc.code or 0)
+        if log_settings is not None and exit_code != 0:
+            _append_cli_error_log(
+                log_settings,
+                argv=raw_args,
+                exit_code=exit_code,
+                cause=exc.__cause__,
+            )
     else:
         exit_code = 0
     if log_settings is not None:
@@ -784,6 +796,38 @@ def main(argv: Sequence[str] | None = None) -> int:
             duration_ms=int((time.monotonic() - started_at) * 1000),
         )
     return exit_code
+
+
+def _append_cli_error_log(
+    settings: DrosSettings,
+    *,
+    argv: list[str],
+    exit_code: int,
+    cause: BaseException | None,
+) -> None:
+    if _is_config_error(cause):
+        return
+    if cause is None:
+        append_error_log(
+            settings,
+            channel="cli",
+            argv=argv,
+            exit_code=exit_code,
+            message=f"command exited with status {exit_code}",
+        )
+        return
+    append_error_log(
+        settings,
+        channel="cli",
+        argv=argv,
+        exit_code=exit_code,
+        error_type=type(cause).__name__,
+        message=str(cause) or repr(cause),
+    )
+
+
+def _is_config_error(exc: BaseException | None) -> bool:
+    return isinstance(exc, UpdateValidationError | ConfigObjectLoadError)
 
 
 if __name__ == "__main__":

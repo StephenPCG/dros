@@ -293,6 +293,50 @@ paths:
     assert "update validation failed:" in output
     assert "Interface/a: bad a" in output
     assert "Interface/b: bad b" in output
+    assert not (tmp_path / "logs/gw-errors.log").exists()
+
+
+def test_update_command_logs_non_config_errors(monkeypatch, tmp_path: Path, capsys) -> None:
+    settings_file = tmp_path / "settings.yaml"
+    settings_file.write_text(
+        f"""
+sysRoot: {tmp_path / "sysroot"}
+paths:
+  configs: {tmp_path / "configs"}
+  logs: {tmp_path / "logs"}
+  run: {tmp_path / "run"}
+""".lstrip(),
+        encoding="utf-8",
+    )
+
+    def fake_ensure_bootstrap_privileges(settings: DrosSettings) -> None:
+        assert settings.sys_root == tmp_path / "sysroot"
+
+    def fake_run_update(
+        settings: DrosSettings,
+        *,
+        target: str | None,
+        verbose: int,
+        console: object,
+    ) -> None:
+        raise RuntimeError("system command exploded")
+
+    monkeypatch.setattr(cli_main, "_ensure_bootstrap_privileges", fake_ensure_bootstrap_privileges)
+    monkeypatch.setattr(cli_main, "run_update", fake_run_update)
+
+    assert cli_main.main(["--settings", str(settings_file), "update", "iface/br0"]) == 1
+
+    output = capsys.readouterr().err
+    assert "update failed:" in output
+    error_records = [
+        json.loads(line)
+        for line in (tmp_path / "logs/gw-errors.log").read_text(encoding="utf-8").splitlines()
+    ]
+    assert len(error_records) == 1
+    assert error_records[0]["channel"] == "cli"
+    assert error_records[0]["argv"] == ["--settings", str(settings_file), "update", "iface/br0"]
+    assert error_records[0]["errorType"] == "RuntimeError"
+    assert error_records[0]["message"] == "system command exploded"
 
 
 def test_ts_command_wraps_tailscale_with_interface_socket(monkeypatch, tmp_path: Path) -> None:

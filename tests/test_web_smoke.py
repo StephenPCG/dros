@@ -81,6 +81,53 @@ def test_web_monitor_summary_requires_auth_and_reports_system_counters(tmp_path:
     assert payload["interfaces"][0]["rxBytes"] == 1000
 
 
+def test_web_logs_require_auth_and_return_invocation_and_error_records(tmp_path: Path) -> None:
+    logs = tmp_path / "logs"
+    logs.mkdir()
+    (logs / "gw-invocations.log").write_text(
+        '{"ts": 1700000000, "kind": "cli", "phase": "start", "argv": ["update"]}\n'
+        '{"ts": 1700000001, "kind": "event.enqueue", "event": "xfrm-start", "iface": "office"}\n',
+        encoding="utf-8",
+    )
+    (logs / "gw-errors.log").write_text(
+        '{"ts": 1700000002, "channel": "event", "event": "xfrm-start", '
+        '"iface": "office", "message": "boom"}\n',
+        encoding="utf-8",
+    )
+    settings = DrosSettings(
+        paths=DrosPaths(configs=tmp_path / "configs", logs=logs),
+        web=WebSettings(authDb=tmp_path / "web-auth.sqlite3"),
+    )
+    WebAuthStore(settings.web.auth_db).create_user("alice", "secret")
+    client = TestClient(create_app(settings))
+
+    assert client.get("/api/logs/invocations").status_code == 401
+    assert client.get("/api/logs/errors").status_code == 401
+    assert client.post(
+        "/api/auth/login",
+        json={"username": "alice", "password": "secret", "remember": False},
+    ).status_code == 200
+
+    invocations = client.get("/api/logs/invocations?limit=10")
+    errors = client.get("/api/logs/errors?limit=10")
+
+    assert invocations.status_code == 200
+    assert invocations.json()["records"] == [
+        {"ts": 1700000001, "kind": "event.enqueue", "event": "xfrm-start", "iface": "office"},
+        {"ts": 1700000000, "kind": "cli", "phase": "start", "argv": ["update"]},
+    ]
+    assert errors.status_code == 200
+    assert errors.json()["records"] == [
+        {
+            "ts": 1700000002,
+            "channel": "event",
+            "event": "xfrm-start",
+            "iface": "office",
+            "message": "boom",
+        }
+    ]
+
+
 def test_web_monitor_rrd_targets_require_auth_and_scan_collectd_data(tmp_path: Path) -> None:
     sysroot = tmp_path / "sysroot"
     configs = tmp_path / "configs"

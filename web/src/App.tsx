@@ -13,6 +13,7 @@ import {
   Plus,
   RefreshCw,
   RotateCw,
+  ScrollText,
   Server,
   Shield,
   Sun,
@@ -29,8 +30,9 @@ type AuthState =
   | { status: "anonymous" }
   | { status: "authenticated"; username: string }
 
-type PageId = "monitor" | "tools" | "openvpn"
+type PageId = "monitor" | "tools" | "logs" | "openvpn"
 type MonitorViewId = "overview" | "bandwidth" | "ping"
+type LogsViewId = "invocations" | "errors"
 type Theme = "light" | "dark"
 type OpenVPNProfileKind = "server" | "client"
 
@@ -138,6 +140,21 @@ type PingSeries = {
   points: PingPoint[]
 }
 
+type LogRecord = {
+  ts?: number
+  kind?: string
+  channel?: string
+  phase?: string
+  argv?: string[]
+  event?: string
+  iface?: string
+  message?: string
+  errorType?: string
+  exitCode?: number
+  durationMs?: number
+  pid?: number
+}
+
 const pages: Array<{
   id: PageId
   label: string
@@ -145,12 +162,14 @@ const pages: Array<{
 }> = [
   { id: "monitor", label: "监控", icon: Activity },
   { id: "tools", label: "工具", icon: Wrench },
+  { id: "logs", label: "日志", icon: ScrollText },
   { id: "openvpn", label: "OpenVPN", icon: Shield },
 ]
 
 const pagePaths: Record<PageId, string> = {
   monitor: "/monitor",
   tools: "/tools",
+  logs: "/logs",
   openvpn: "/openvpn",
 }
 
@@ -313,6 +332,8 @@ function App() {
         </div>
         {activePage === "monitor" ? (
           <MonitorPage />
+        ) : activePage === "logs" ? (
+          <LogsPage />
         ) : activePage === "openvpn" ? (
           <OpenVPNPage />
         ) : (
@@ -1246,6 +1267,117 @@ function MetricPanel({ label, value, detail }: { label: string; value: ReactNode
   )
 }
 
+function LogsPage() {
+  const [view, setView] = useState<LogsViewId>("invocations")
+  const [records, setRecords] = useState<LogRecord[]>([])
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState("")
+
+  useEffect(() => {
+    loadLogs(view)
+  }, [view])
+
+  async function loadLogs(nextView = view) {
+    setLoading(true)
+    setError("")
+    try {
+      const data = await apiJson<{ records: LogRecord[] }>(`/api/logs/${nextView}?limit=300`)
+      setRecords(data.records)
+    } catch (err) {
+      setError(errorMessage(err, "加载日志失败"))
+      setRecords([])
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  return (
+    <div className="min-h-[calc(100svh-11rem)] space-y-4">
+      <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+        <div className="grid grid-cols-2 rounded-md border bg-muted p-1 md:w-fit">
+          {([
+            ["invocations", "执行日志"],
+            ["errors", "错误日志"],
+          ] as const).map(([id, label]) => (
+            <button
+              key={id}
+              className={cn(
+                "h-9 rounded-sm px-3 text-sm font-medium transition-colors",
+                view === id ? "bg-background text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground",
+              )}
+              type="button"
+              onClick={() => setView(id)}
+              aria-current={view === id ? "page" : undefined}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+        <Button variant="outline" onClick={() => loadLogs()} disabled={loading}>
+          {loading ? <Loader2 className="size-4 animate-spin" /> : <RefreshCw className="size-4" />}
+          刷新
+        </Button>
+      </div>
+
+      {error ? (
+        <div className="rounded-md border border-destructive/35 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+          {error}
+        </div>
+      ) : null}
+
+      <div className="overflow-hidden rounded-md border bg-background">
+        {loading ? (
+          <div className="grid h-36 place-items-center text-muted-foreground">
+            <Loader2 className="size-5 animate-spin" aria-label="Loading" />
+          </div>
+        ) : records.length === 0 ? (
+          <div className="px-3 py-10 text-sm text-muted-foreground">暂无日志</div>
+        ) : (
+          <div className="max-w-full overflow-x-auto">
+            <table className="w-full min-w-[58rem] text-left text-sm">
+              <thead className="border-b bg-muted/50 text-xs uppercase text-muted-foreground">
+                <tr>
+                  <th className="sticky left-0 z-20 w-44 min-w-44 border-r bg-muted px-3 py-2 font-medium">
+                    时间
+                  </th>
+                  <th className="px-3 py-2 font-medium">类型</th>
+                  <th className="px-3 py-2 font-medium">命令 / Hook</th>
+                  <th className="px-3 py-2 font-medium">状态</th>
+                  <th className="px-3 py-2 font-medium">信息</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y">
+                {records.map((record, index) => (
+                  <tr key={`${record.ts ?? index}:${record.pid ?? ""}:${index}`}>
+                    <td className="sticky left-0 z-10 w-44 min-w-44 border-r bg-background px-3 py-3 font-mono text-xs">
+                      {formatLogTime(record.ts)}
+                    </td>
+                    <td className="px-3 py-3">
+                      <span className="inline-flex h-7 items-center rounded-md border px-2 font-mono text-xs">
+                        {record.channel ?? record.kind ?? "-"}
+                      </span>
+                    </td>
+                    <td className="px-3 py-3 font-mono text-xs">
+                      <div className="max-w-[28rem] truncate">{formatLogCommand(record)}</div>
+                      {record.iface ? (
+                        <div className="mt-1 text-muted-foreground">iface={record.iface}</div>
+                      ) : null}
+                    </td>
+                    <td className="px-3 py-3 font-mono text-xs">{formatLogStatus(record)}</td>
+                    <td className="px-3 py-3 text-xs">
+                      <div className="max-w-[30rem] break-words">{formatLogMessage(record)}</div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
 function OpenVPNPage() {
   const [instances, setInstances] = useState<OpenVPNInstance[]>([])
   const [selectedInstance, setSelectedInstance] = useState("")
@@ -1937,6 +2069,44 @@ function formatChartTime(timestamp: number): string {
     hour: "2-digit",
     minute: "2-digit",
   })
+}
+
+function formatLogTime(timestamp: number | undefined): string {
+  if (timestamp == null) {
+    return "-"
+  }
+  return new Date(timestamp * 1000).toLocaleString()
+}
+
+function formatLogCommand(record: LogRecord): string {
+  if (record.argv && record.argv.length > 0) {
+    return record.argv.join(" ")
+  }
+  if (record.event) {
+    return record.iface ? `${record.event} ${record.iface}` : record.event
+  }
+  return "-"
+}
+
+function formatLogStatus(record: LogRecord): string {
+  const parts: string[] = []
+  if (record.phase) {
+    parts.push(record.phase)
+  }
+  if (record.exitCode != null) {
+    parts.push(`exit=${record.exitCode}`)
+  }
+  if (record.durationMs != null) {
+    parts.push(`${record.durationMs}ms`)
+  }
+  return parts.join(" · ") || "-"
+}
+
+function formatLogMessage(record: LogRecord): string {
+  if (record.errorType && record.message) {
+    return `${record.errorType}: ${record.message}`
+  }
+  return record.message ?? "-"
 }
 
 async function apiJson<T = unknown>(input: RequestInfo | URL, init?: RequestInit): Promise<T> {

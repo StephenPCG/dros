@@ -502,6 +502,9 @@ spec:
       input:
         services:
           - udp/500
+          - gre
+          - esp
+          - ah
 """.lstrip(),
         encoding="utf-8",
     )
@@ -518,6 +521,9 @@ spec:
     assert "type filter hook input priority filter; policy drop;" in nft
     assert "add rule inet dros_filter input_user tcp dport 22 accept" in nft
     assert "add rule inet dros_filter input_auto iifgroup 1 udp dport 500 accept" in nft
+    assert "add rule inet dros_filter input_auto iifgroup 1 meta l4proto gre accept" in nft
+    assert "add rule inet dros_filter input_auto iifgroup 1 meta l4proto esp accept" in nft
+    assert "add rule inet dros_filter input_auto iifgroup 1 meta l4proto ah accept" in nft
     assert "udp dport 51820" not in nft
     assert "udp dport 1194" not in nft
     assert ["nft", "-f", "/etc/nftables.conf"] in _commands(result)

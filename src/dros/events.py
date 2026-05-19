@@ -10,7 +10,7 @@ from rich.console import Console
 
 from dros.config_objects import load_config_objects
 from dros.executor import CommandRunner, SystemAction, SystemExecutor
-from dros.invocation_log import append_invocation_log
+from dros.invocation_log import append_error_log, append_invocation_log
 from dros.locks import APPLY_LOCK_PATH, LockBusyError, exclusive_lock
 from dros.plugins import create_default_registry
 from dros.plugins.base import PluginRegistry, UpdateContext
@@ -93,40 +93,33 @@ def process_event_queue(
                 with apply_lock:
                     return _process_event_queue_locked(
                         settings,
-                        offset=offset,
                         verbose=verbose,
                         console=console,
                         runner=runner,
                         registry=registry,
                     )
             except LockBusyError:
-                return offset
+                return 0
     except LockBusyError:
-        return offset
+        return 0
 
 
 def _process_event_queue_locked(
     settings: DrosSettings,
     *,
-    offset: int,
     verbose: int,
     console: Console | None,
     runner: CommandRunner,
     registry: PluginRegistry | None,
 ) -> int:
-    path = settings.paths.run / EVENTS_PATH
-    if path.stat().st_size < offset:
-        offset = 0
-
-    with path.open("r", encoding="utf-8") as handle:
-        handle.seek(offset)
-        lines = handle.readlines()
-        next_offset = handle.tell()
-
+    batch = _read_event_batch(settings)
+    lines = batch.splitlines()
+    processed = 0
     for payload in _coalesce_event_payloads(lines):
         event = payload["event"]
         iface = payload["iface"]
         append_invocation_log(settings, kind="event.process", phase="start", event=event, iface=iface)
+        processed += 1
         try:
             process_event(
                 settings,
@@ -147,14 +140,50 @@ def _process_event_queue_locked(
                 iface=iface,
                 message=str(exc),
             )
+            append_error_log(
+                settings,
+                channel="event",
+                error_type=type(exc).__name__,
+                event=event,
+                iface=iface,
+                message=str(exc),
+            )
             if console is not None:
                 console.print(f"[red]event failed:[/red] {exc}")
-    return next_offset
+    _delete_event_batch(settings, batch)
+    return processed
+
+
+def _read_event_batch(settings: DrosSettings) -> str:
+    path = settings.paths.run / EVENTS_PATH
+    with exclusive_lock(settings.paths.run / EVENTS_APPEND_LOCK_PATH):
+        try:
+            return path.read_text(encoding="utf-8")
+        except OSError:
+            return ""
+
+
+def _delete_event_batch(settings: DrosSettings, batch: str) -> None:
+    if not batch:
+        return
+    path = settings.paths.run / EVENTS_PATH
+    with exclusive_lock(settings.paths.run / EVENTS_APPEND_LOCK_PATH):
+        try:
+            current = path.read_text(encoding="utf-8")
+        except OSError:
+            return
+        if current.startswith(batch):
+            path.write_text(current[len(batch) :], encoding="utf-8")
+            return
+        # This should only be reached if an external editor touched the queue.
+        current_lines = current.splitlines()
+        batch_line_count = len(batch.splitlines())
+        remaining = current_lines[batch_line_count:]
+        path.write_text("".join(f"{line}\n" for line in remaining), encoding="utf-8")
 
 
 def _coalesce_event_payloads(lines: list[str]) -> list[dict[str, str | None]]:
-    result: list[dict[str, str | None]] = []
-    seen: set[tuple[str, str | None]] = set()
+    result: dict[tuple[str, str | None], dict[str, str | None]] = {}
     for line in lines:
         try:
             payload = json.loads(line)
@@ -166,8 +195,7 @@ def _coalesce_event_payloads(lines: list[str]) -> list[dict[str, str | None]]:
             continue
         normalized_iface = iface if isinstance(iface, str) else None
         key = (event, normalized_iface)
-        if key in seen:
-            continue
-        seen.add(key)
-        result.append({"event": event, "iface": normalized_iface})
-    return result
+        if key in result:
+            del result[key]
+        result[key] = {"event": event, "iface": normalized_iface}
+    return list(result.values())

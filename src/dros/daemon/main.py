@@ -37,9 +37,8 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     signal.signal(signal.SIGTERM, request_stop)
     signal.signal(signal.SIGINT, request_stop)
-    offset = 0
     while not stop.wait(2):
-        offset = process_event_queue(settings, offset=offset, console=console)
+        process_event_queue(settings, console=console)
     return 0
 
 

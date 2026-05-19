@@ -52,6 +52,7 @@ spec:
         services:
           - tcp/22
           - udp/53
+          - gre
       forward:
         policy: accept
 ```
@@ -120,7 +121,8 @@ allowIcmpv6: null
 
 - `subject`：必填，接口名、`interface/<name>` 或 `devgroup/<name>`
 - `input.ping`：是否允许 echo request
-- `input.services`：服务列表，格式为 `tcp/<port>` 或 `udp/<port>`
+- `input.services`：服务列表。端口服务格式为 `tcp/<port>` 或 `udp/<port>`；
+  也支持无端口的 IP protocol：`gre`、`esp`、`ah`
 - `input.dhcpv6Client`：是否允许 DHCPv6 client 流量
 - `input.policy`：追加到 input_policy 的 raw policy
 - `forward.allowTo`：允许转发到哪些 interface/devgroup
