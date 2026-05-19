@@ -44,6 +44,16 @@ def test_web_static_keeps_missing_assets_as_404(tmp_path: Path) -> None:
     assert response.status_code == 404
 
 
+def test_monitor_dashboard_grid_uses_finer_resize_columns() -> None:
+    source = (Path(__file__).resolve().parents[1] / "web/src/App.tsx").read_text(encoding="utf-8")
+
+    assert "const DASHBOARD_COLUMNS = { lg: 12, md: 8, sm: 4 }" in source
+    assert "function defaultDashboardItemWidth(columns: number): number" in source
+    assert "const width = defaultDashboardItemWidth(columns)" in source
+    assert "x: (index * width) % columns" in source
+    assert "y: Math.floor((index * width) / columns) * height" in source
+
+
 def test_web_monitor_summary_requires_auth_and_reports_system_counters(tmp_path: Path) -> None:
     sysroot = tmp_path / "sysroot"
     (sysroot / "proc").mkdir(parents=True)
@@ -175,6 +185,8 @@ spec:
     payload = response.json()
     assert payload["timespans"] == [
         {"id": "1h", "label": "1h", "seconds": 3600},
+        {"id": "4h", "label": "4h", "seconds": 14400},
+        {"id": "12h", "label": "12h", "seconds": 43200},
         {"id": "1d", "label": "1d", "seconds": 86400},
         {"id": "1w", "label": "1w", "seconds": 604800},
         {"id": "1m", "label": "1m", "seconds": 2592000},
@@ -246,7 +258,7 @@ def test_collect_ping_series_fetches_latency_and_loss_points(tmp_path: Path) -> 
         return """
                            value
 1700000000: 0.0000000000e+00
-1700000010: 2.5000000000e+01
+1700000010: 2.5000000000e-01
 """
 
     payload = collect_ping_series(settings, target="1.1.1.1", timespan="1h", runner=runner)

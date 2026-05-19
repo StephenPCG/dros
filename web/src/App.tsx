@@ -1,15 +1,25 @@
 import { useEffect, useMemo, useState } from "react"
 import type { FormEvent, ReactNode } from "react"
+import ReactEChartsCore from "echarts-for-react/lib/core"
+import type { EChartsOption } from "echarts"
+import * as echarts from "echarts/core"
+import { GridComponent, GraphicComponent, LegendComponent, TooltipComponent } from "echarts/components"
+import { LineChart } from "echarts/charts"
+import { CanvasRenderer } from "echarts/renderers"
 import {
   Activity,
   Ban,
+  BarChart3,
   ChevronLeft,
   Download,
+  GripHorizontal,
   KeyRound,
+  LayoutDashboard,
   Loader2,
   LogOut,
   Menu,
   Moon,
+  MoreVertical,
   Plus,
   RefreshCw,
   RotateCw,
@@ -17,13 +27,18 @@ import {
   Server,
   Shield,
   Sun,
+  Trash2,
   X,
   Wrench,
 } from "lucide-react"
 import type { LucideIcon } from "lucide-react"
+import { Responsive, useContainerWidth } from "react-grid-layout"
+import type { Layout, LayoutItem, ResponsiveLayouts } from "react-grid-layout"
 
 import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
+
+type Layouts = ResponsiveLayouts
 
 type AuthState =
   | { status: "loading" }
@@ -32,9 +47,11 @@ type AuthState =
 
 type PageId = "monitor" | "tools" | "logs" | "openvpn"
 type MonitorViewId = "overview" | "bandwidth" | "ping"
+type MonitorTabKind = "overview" | "dashboard"
 type LogsViewId = "invocations" | "errors"
 type Theme = "light" | "dark"
 type OpenVPNProfileKind = "server" | "client"
+type DashboardChartType = "bandwidth" | "ping"
 
 type OpenVPNInstance = {
   name: string
@@ -140,6 +157,35 @@ type PingSeries = {
   points: PingPoint[]
 }
 
+type DashboardChart = {
+  id: string
+  type: DashboardChartType
+  target: string
+}
+
+type MonitorDashboard = {
+  id: string
+  name: string
+  timespan: string
+  charts: DashboardChart[]
+  layouts: Layouts
+  layoutVersion: number
+}
+
+type DashboardChartSeries = BandwidthSeries | PingSeries
+
+type AddChartForm = {
+  type: DashboardChartType
+  target: string
+}
+
+type NumericStats = {
+  min: number | null
+  avg: number | null
+  max: number | null
+  last: number | null
+}
+
 type LogRecord = {
   ts?: number
   kind?: string
@@ -172,6 +218,23 @@ const pagePaths: Record<PageId, string> = {
   logs: "/logs",
   openvpn: "/openvpn",
 }
+
+echarts.use([GridComponent, GraphicComponent, LegendComponent, TooltipComponent, LineChart, CanvasRenderer])
+const DASHBOARD_STORAGE_KEY = "dros-monitor-dashboards-v1"
+const ACTIVE_DASHBOARD_STORAGE_KEY = "dros-monitor-active-dashboard-v1"
+const DASHBOARD_REFRESH_MS = 10_000
+const DASHBOARD_LAYOUT_VERSION = 2
+const DASHBOARD_BREAKPOINTS = { lg: 1100, md: 760, sm: 0 }
+const DASHBOARD_COLUMNS = { lg: 12, md: 8, sm: 4 }
+const LEGACY_DASHBOARD_COLUMNS = { lg: 3, md: 2, sm: 1 }
+const DEFAULT_TIMESPANS: MonitorTimespan[] = [
+  { id: "1h", label: "1h", seconds: 60 * 60 },
+  { id: "4h", label: "4h", seconds: 4 * 60 * 60 },
+  { id: "12h", label: "12h", seconds: 12 * 60 * 60 },
+  { id: "1d", label: "1d", seconds: 24 * 60 * 60 },
+  { id: "1w", label: "1w", seconds: 7 * 24 * 60 * 60 },
+  { id: "1m", label: "1m", seconds: 30 * 24 * 60 * 60 },
+]
 
 function App() {
   const [auth, setAuth] = useState<AuthState>({ status: "loading" })
@@ -525,36 +588,850 @@ function MobileNavigationDrawer({
 }
 
 function MonitorPage() {
-  const [view, setView] = useState<MonitorViewId>(() => monitorViewFromPath(window.location.pathname))
+  const [targets, setTargets] = useState<MonitorRrdTargets | null>(null)
+  const [dashboards, setDashboards] = useState<MonitorDashboard[]>(() => loadDashboards())
+  const [activeDashboardId, setActiveDashboardId] = useState(
+    () => dashboardIdFromPath(window.location.pathname) ?? loadActiveDashboardId(),
+  )
+  const [activeMonitorTab, setActiveMonitorTab] = useState<MonitorTabKind>(() =>
+    dashboardIdFromPath(window.location.pathname) ? "dashboard" : "overview",
+  )
+  const [series, setSeries] = useState<Record<string, DashboardChartSeries>>({})
+  const [loadingTargets, setLoadingTargets] = useState(true)
+  const [loadingSeries, setLoadingSeries] = useState(false)
+  const [error, setError] = useState("")
+  const [addChartOpen, setAddChartOpen] = useState(false)
+  const [moreOpen, setMoreOpen] = useState(false)
+  const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false)
+  const activeDashboard = dashboards.find((dashboard) => dashboard.id === activeDashboardId) ?? dashboards[0]
+  const timespans = targets?.timespans.length ? targets.timespans : DEFAULT_TIMESPANS
+  const chartsKey = activeDashboard?.charts
+    .map((chart) => `${chart.id}:${chart.type}:${chart.target}`)
+    .join("|")
+
+  useEffect(() => {
+    if (dashboards.length === 0) {
+      const dashboard = createDashboard("默认 Dashboard")
+      setDashboards([dashboard])
+      setActiveDashboardId(dashboard.id)
+      return
+    }
+    if (!activeDashboardId || !dashboards.some((dashboard) => dashboard.id === activeDashboardId)) {
+      const nextDashboardId = dashboards[0].id
+      setActiveDashboardId(nextDashboardId)
+      if (activeMonitorTab === "dashboard") {
+        pushMonitorPath(dashboardPath(nextDashboardId))
+      }
+    }
+  }, [activeDashboardId, activeMonitorTab, dashboards])
+
+  useEffect(() => {
+    window.localStorage.setItem(DASHBOARD_STORAGE_KEY, JSON.stringify(dashboards))
+  }, [dashboards])
+
+  useEffect(() => {
+    if (activeDashboardId) {
+      window.localStorage.setItem(ACTIVE_DASHBOARD_STORAGE_KEY, activeDashboardId)
+    }
+  }, [activeDashboardId])
 
   useEffect(() => {
     function handlePopState() {
-      setView(monitorViewFromPath(window.location.pathname))
+      const dashboardId = dashboardIdFromPath(window.location.pathname)
+      if (dashboardId) {
+        setActiveDashboardId(dashboardId)
+        setActiveMonitorTab("dashboard")
+      } else {
+        setActiveMonitorTab("overview")
+      }
     }
     window.addEventListener("popstate", handlePopState)
     return () => window.removeEventListener("popstate", handlePopState)
   }, [])
 
-  function handleViewChange(next: MonitorViewId) {
-    setView(next)
-    const path = monitorViewPath(next)
-    if (window.location.pathname !== path) {
-      window.history.pushState({ page: "monitor", view: next }, "", path)
+  useEffect(() => {
+    let cancelled = false
+    async function loadTargets() {
+      setLoadingTargets(true)
+      setError("")
+      try {
+        const targetData = await apiJson<MonitorRrdTargets>("/api/monitor/rrd/targets")
+        if (!cancelled) {
+          setTargets(targetData)
+        }
+      } catch (err) {
+        if (!cancelled) {
+          setError(errorMessage(err, "加载监控数据失败"))
+        }
+      } finally {
+        if (!cancelled) {
+          setLoadingTargets(false)
+        }
+      }
     }
+    loadTargets()
+    const timer = window.setInterval(loadTargets, DASHBOARD_REFRESH_MS)
+    return () => {
+      cancelled = true
+      window.clearInterval(timer)
+    }
+  }, [])
+
+  useEffect(() => {
+    if (!activeDashboard || activeMonitorTab !== "dashboard") {
+      return
+    }
+    let cancelled = false
+    async function loadDashboardSeries() {
+      if (activeDashboard.charts.length === 0) {
+        setSeries({})
+        return
+      }
+      setLoadingSeries(true)
+      setError("")
+      try {
+        const values = await Promise.all(
+          activeDashboard.charts.map(async (chart) => {
+            const params = new URLSearchParams({
+              target: chart.target,
+              timespan: activeDashboard.timespan,
+            })
+            const path =
+              chart.type === "bandwidth"
+                ? `/api/monitor/rrd/bandwidth?${params}`
+                : `/api/monitor/rrd/ping?${params}`
+            const data = await apiJson<DashboardChartSeries>(path)
+            return [chart.id, data] as const
+          }),
+        )
+        if (!cancelled) {
+          setSeries(Object.fromEntries(values))
+        }
+      } catch (err) {
+        if (!cancelled) {
+          setError(errorMessage(err, "加载图表数据失败"))
+        }
+      } finally {
+        if (!cancelled) {
+          setLoadingSeries(false)
+        }
+      }
+    }
+    loadDashboardSeries()
+    const timer = window.setInterval(loadDashboardSeries, DASHBOARD_REFRESH_MS)
+    return () => {
+      cancelled = true
+      window.clearInterval(timer)
+    }
+  }, [activeDashboard?.id, activeDashboard?.timespan, activeMonitorTab, chartsKey])
+
+  function updateActiveDashboard(updater: (dashboard: MonitorDashboard) => MonitorDashboard) {
+    if (!activeDashboard) {
+      return
+    }
+    setDashboards((current) =>
+      current.map((dashboard) => (dashboard.id === activeDashboard.id ? updater(dashboard) : dashboard)),
+    )
+  }
+
+  function selectOverview() {
+    setActiveMonitorTab("overview")
+    setMoreOpen(false)
+    pushMonitorPath("/monitor")
+  }
+
+  function selectDashboard(dashboardId: string) {
+    setActiveDashboardId(dashboardId)
+    setActiveMonitorTab("dashboard")
+    setMoreOpen(false)
+    pushMonitorPath(dashboardPath(dashboardId))
+  }
+
+  function createNewDashboard() {
+    const dashboard = createDashboard(`Dashboard ${dashboards.length + 1}`)
+    setDashboards((current) => [...current, dashboard])
+    selectDashboard(dashboard.id)
+  }
+
+  function deleteActiveDashboard() {
+    if (!activeDashboard || dashboards.length <= 1) {
+      return
+    }
+    const nextDashboards = dashboards.filter((dashboard) => dashboard.id !== activeDashboard.id)
+    const nextDashboardId = nextDashboards[0]?.id ?? ""
+    setDashboards(nextDashboards)
+    setActiveDashboardId(nextDashboardId)
+    setDeleteConfirmOpen(false)
+    setMoreOpen(false)
+    if (nextDashboardId) {
+      pushMonitorPath(dashboardPath(nextDashboardId))
+    } else {
+      setActiveMonitorTab("overview")
+      pushMonitorPath("/monitor")
+    }
+  }
+
+  function addChart(form: AddChartForm) {
+    if (!activeDashboard || !form.target) {
+      return
+    }
+    const chart: DashboardChart = {
+      id: createId("chart"),
+      type: form.type,
+      target: form.target,
+    }
+    updateActiveDashboard((dashboard) => ({
+      ...dashboard,
+      charts: [...dashboard.charts, chart],
+      layouts: addChartToLayouts(dashboard.layouts, dashboard.charts.length, chart.id),
+    }))
+    setAddChartOpen(false)
+  }
+
+  function removeChart(chartId: string) {
+    updateActiveDashboard((dashboard) => ({
+      ...dashboard,
+      charts: dashboard.charts.filter((chart) => chart.id !== chartId),
+      layouts: removeChartFromLayouts(dashboard.layouts, chartId),
+    }))
+  }
+
+  function handleLayoutChange(_layout: Layout, allLayouts: Layouts) {
+    updateActiveDashboard((dashboard) => ({
+      ...dashboard,
+      layouts: allLayouts,
+    }))
+  }
+
+  if (!activeDashboard) {
+    return (
+      <div className="grid min-h-[calc(100svh-11rem)] place-items-center text-sm text-muted-foreground">
+        正在初始化 Dashboard
+      </div>
+    )
   }
 
   return (
     <div className="min-h-[calc(100svh-11rem)] space-y-5">
-      <MonitorSubNavigation view={view} onChange={handleViewChange} />
-      {view === "bandwidth" ? (
-        <MonitorBandwidthPage />
-      ) : view === "ping" ? (
-        <MonitorPingPage />
+      <div className="flex max-w-full items-center gap-1 overflow-x-auto rounded-md border bg-muted p-1">
+        <button
+          className={cn(
+            "h-9 min-w-fit rounded-sm px-3 text-sm font-medium transition-colors",
+            activeMonitorTab === "overview"
+              ? "bg-background text-foreground shadow-sm"
+              : "text-muted-foreground hover:text-foreground",
+          )}
+          type="button"
+          onClick={selectOverview}
+          aria-current={activeMonitorTab === "overview" ? "page" : undefined}
+        >
+          概览
+        </button>
+        {dashboards.map((dashboard) => {
+          const selected = activeMonitorTab === "dashboard" && dashboard.id === activeDashboard.id
+          return (
+            <button
+              key={dashboard.id}
+              className={cn(
+                "h-9 min-w-fit max-w-[12rem] truncate rounded-sm px-3 text-sm font-medium transition-colors",
+                selected
+                  ? "bg-background text-foreground shadow-sm"
+                  : "text-muted-foreground hover:text-foreground",
+              )}
+              type="button"
+              onClick={() => selectDashboard(dashboard.id)}
+              aria-current={selected ? "page" : undefined}
+            >
+              {dashboard.name}
+            </button>
+          )
+        })}
+        <TooltipIconButton label="新建 Dashboard" onClick={createNewDashboard}>
+          <Plus className="size-4" />
+        </TooltipIconButton>
+      </div>
+
+      {activeMonitorTab === "overview" ? <MonitorOverviewPage /> : null}
+
+      {activeMonitorTab === "dashboard" ? (
+        <>
+          <div className="flex flex-col gap-3 rounded-md border bg-background p-3 lg:flex-row lg:items-center lg:justify-between">
+            <div className="min-w-0">
+              <div className="flex items-center gap-2 text-sm font-semibold">
+                <LayoutDashboard className="size-4 shrink-0 text-muted-foreground" />
+                <input
+                  className="h-8 min-w-0 max-w-72 rounded-md border bg-background px-2 text-sm outline-none focus:border-ring focus:ring-2 focus:ring-ring/20"
+                  value={activeDashboard.name}
+                  onChange={(event) =>
+                    updateActiveDashboard((dashboard) => ({ ...dashboard, name: event.target.value }))
+                  }
+                  aria-label="Dashboard 名称"
+                />
+                {loadingSeries ? <Loader2 className="size-4 animate-spin text-muted-foreground" /> : null}
+              </div>
+              <div className="mt-1 text-xs text-muted-foreground">
+                自动刷新 10s · 布局和时间段保存在当前浏览器
+              </div>
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <select
+                className="h-9 rounded-md border bg-background px-2 text-sm outline-none focus:border-ring focus:ring-2 focus:ring-ring/20"
+                value={activeDashboard.timespan}
+                onChange={(event) =>
+                  updateActiveDashboard((dashboard) => ({ ...dashboard, timespan: event.target.value }))
+                }
+                aria-label="Dashboard 时间段"
+              >
+                {timespans.map((timespan) => (
+                  <option key={timespan.id} value={timespan.id}>
+                    {timespan.label}
+                  </option>
+                ))}
+              </select>
+              <Button variant="outline" onClick={() => setAddChartOpen(true)} disabled={loadingTargets}>
+                <BarChart3 className="size-4" />
+                添加图表
+              </Button>
+              <div className="relative">
+                <TooltipIconButton label="更多" onClick={() => setMoreOpen((current) => !current)}>
+                  <MoreVertical className="size-4" />
+                </TooltipIconButton>
+                {moreOpen ? (
+                  <div className="absolute right-0 top-10 z-20 w-44 overflow-hidden rounded-md border bg-background py-1 shadow-lg">
+                    <button
+                      className="flex h-9 w-full items-center gap-2 px-3 text-left text-sm text-destructive transition-colors hover:bg-muted disabled:cursor-not-allowed disabled:opacity-50"
+                      type="button"
+                      onClick={() => {
+                        setMoreOpen(false)
+                        setDeleteConfirmOpen(true)
+                      }}
+                      disabled={dashboards.length <= 1}
+                    >
+                      <Trash2 className="size-4" />
+                      删除 Dashboard
+                    </button>
+                  </div>
+                ) : null}
+              </div>
+            </div>
+          </div>
+
+          {error ? (
+            <div className="rounded-md border border-destructive/35 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+              {error}
+            </div>
+          ) : null}
+
+          {activeDashboard.charts.length === 0 ? (
+            <div className="rounded-md border border-dashed bg-background px-4 py-14 text-center">
+              <div className="mx-auto grid size-11 place-items-center rounded-md border bg-muted">
+                <BarChart3 className="size-5 text-muted-foreground" />
+              </div>
+              <div className="mt-3 text-sm font-medium">这个 Dashboard 还没有图表</div>
+              <div className="mt-1 text-sm text-muted-foreground">添加带宽或 Ping 图表后，可以拖拽调整位置。</div>
+              <Button className="mt-4" onClick={() => setAddChartOpen(true)} disabled={loadingTargets}>
+                <Plus className="size-4" />
+                添加图表
+              </Button>
+            </div>
+          ) : (
+            <DashboardGrid
+              key={activeDashboard.id}
+              dashboard={activeDashboard}
+              series={series}
+              onLayoutChange={handleLayoutChange}
+              onRemoveChart={removeChart}
+            />
+          )}
+        </>
+      ) : null}
+
+      {addChartOpen ? (
+        <AddDashboardChartModal
+          targets={targets}
+          onAdd={addChart}
+          onClose={() => setAddChartOpen(false)}
+        />
+      ) : null}
+
+      {deleteConfirmOpen ? (
+        <Modal title="删除 Dashboard" onClose={() => setDeleteConfirmOpen(false)}>
+          <div className="space-y-4">
+            <p className="text-sm text-muted-foreground">
+              确定删除 <span className="font-medium text-foreground">{activeDashboard.name}</span>？这个操作只会删除当前浏览器中保存的 Dashboard 配置。
+            </p>
+            <div className="flex justify-end gap-2">
+              <Button variant="outline" onClick={() => setDeleteConfirmOpen(false)}>
+                取消
+              </Button>
+              <Button
+                className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                onClick={deleteActiveDashboard}
+              >
+                删除
+              </Button>
+            </div>
+          </div>
+        </Modal>
+      ) : null}
+    </div>
+  )
+}
+
+function AddDashboardChartModal({
+  targets,
+  onAdd,
+  onClose,
+}: {
+  targets: MonitorRrdTargets | null
+  onAdd: (form: AddChartForm) => void
+  onClose: () => void
+}) {
+  const bandwidthTargets = targets?.bandwidth.map((item) => item.name) ?? []
+  const pingTargets = targets?.ping.map((item) => item.name) ?? []
+  const initialType: DashboardChartType = bandwidthTargets.length > 0 ? "bandwidth" : "ping"
+  const [form, setForm] = useState<AddChartForm>({
+    type: initialType,
+    target: (initialType === "bandwidth" ? bandwidthTargets[0] : pingTargets[0]) ?? "",
+  })
+  const options = form.type === "bandwidth" ? bandwidthTargets : pingTargets
+
+  useEffect(() => {
+    setForm((current) => {
+      const available = current.type === "bandwidth" ? bandwidthTargets : pingTargets
+      if (available.includes(current.target)) {
+        return current
+      }
+      return { ...current, target: available[0] ?? "" }
+    })
+  }, [bandwidthTargets.join("|"), pingTargets.join("|")])
+
+  function setType(type: DashboardChartType) {
+    const nextTargets = type === "bandwidth" ? bandwidthTargets : pingTargets
+    setForm({ type, target: nextTargets[0] ?? "" })
+  }
+
+  function handleSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    onAdd(form)
+  }
+
+  return (
+    <Modal title="添加图表" onClose={onClose}>
+      <form className="space-y-4" onSubmit={handleSubmit}>
+        <div className="grid grid-cols-2 gap-2">
+          {(["bandwidth", "ping"] as const).map((type) => (
+            <button
+              key={type}
+              className={cn(
+                "rounded-md border px-3 py-2 text-sm font-medium transition-colors",
+                form.type === type
+                  ? "border-ring bg-muted text-foreground"
+                  : "text-muted-foreground hover:text-foreground",
+              )}
+              type="button"
+              onClick={() => setType(type)}
+            >
+              {type === "bandwidth" ? "带宽" : "Ping"}
+            </button>
+          ))}
+        </div>
+        <label className="block space-y-2">
+          <span className="text-sm font-medium">{form.type === "bandwidth" ? "接口" : "目标"}</span>
+          <select
+            className="h-10 w-full rounded-md border bg-background px-3 text-sm outline-none transition-colors focus:border-ring focus:ring-2 focus:ring-ring/20"
+            value={form.target}
+            onChange={(event) => setForm((current) => ({ ...current, target: event.target.value }))}
+            required
+          >
+            {options.length === 0 ? <option value="">暂无可选项</option> : null}
+            {options.map((target) => (
+              <option key={target} value={target}>
+                {target}
+              </option>
+            ))}
+          </select>
+        </label>
+        <div className="flex justify-end gap-2">
+          <Button variant="outline" type="button" onClick={onClose}>
+            取消
+          </Button>
+          <Button type="submit" disabled={!form.target}>
+            添加
+          </Button>
+        </div>
+      </form>
+    </Modal>
+  )
+}
+
+function DashboardGrid({
+  dashboard,
+  series,
+  onLayoutChange,
+  onRemoveChart,
+}: {
+  dashboard: MonitorDashboard
+  series: Record<string, DashboardChartSeries>
+  onLayoutChange: (_layout: Layout, allLayouts: Layouts) => void
+  onRemoveChart: (chartId: string) => void
+}) {
+  const {
+    width,
+    containerRef,
+    mounted,
+    measureWidth,
+  } = useContainerWidth({ measureBeforeMount: true, initialWidth: 0 })
+  const measuredWidth = Math.max(1, Math.floor(width))
+
+  useEffect(() => {
+    const frameId = window.requestAnimationFrame(() => measureWidth())
+    return () => window.cancelAnimationFrame(frameId)
+  }, [dashboard.id, dashboard.charts.length, measureWidth])
+
+  return (
+    <div ref={containerRef} className="min-w-0 max-w-full overflow-hidden">
+      {mounted && measuredWidth > 1 ? (
+        <Responsive
+          className="layout"
+          layouts={ensureLayoutsForCharts(dashboard)}
+          breakpoints={DASHBOARD_BREAKPOINTS}
+          cols={DASHBOARD_COLUMNS}
+          width={measuredWidth}
+          rowHeight={34}
+          margin={[12, 12]}
+          containerPadding={[0, 0]}
+          dragConfig={{ bounded: true, handle: ".dashboard-drag-handle" }}
+          resizeConfig={{ enabled: true }}
+          onLayoutChange={onLayoutChange}
+        >
+          {dashboard.charts.map((chart) => (
+            <div key={chart.id}>
+              <DashboardChartCard
+                chart={chart}
+                series={series[chart.id]}
+                timespan={dashboard.timespan}
+                onRemove={() => onRemoveChart(chart.id)}
+              />
+            </div>
+          ))}
+        </Responsive>
       ) : (
-        <MonitorOverviewPage />
+        <div className="grid h-64 place-items-center rounded-md border bg-background text-muted-foreground">
+          <Loader2 className="size-5 animate-spin" aria-label="Loading" />
+        </div>
       )}
     </div>
   )
+}
+
+function DashboardChartCard({
+  chart,
+  series,
+  timespan,
+  onRemove,
+}: {
+  chart: DashboardChart
+  series?: DashboardChartSeries
+  timespan: string
+  onRemove: () => void
+}) {
+  const title = chart.type === "bandwidth" ? `带宽 · ${chart.target}` : `Ping · ${chart.target}`
+  const bandwidthSeries = chart.type === "bandwidth" ? (series as BandwidthSeries | undefined) : undefined
+  const pingSeries = chart.type === "ping" ? (series as PingSeries | undefined) : undefined
+  return (
+    <div className="flex h-full min-h-0 flex-col overflow-hidden rounded-md border bg-background shadow-sm">
+      <div className="dashboard-drag-handle flex cursor-move items-center justify-between gap-3 border-b px-3 py-2">
+        <div className="min-w-0">
+          <div className="flex items-center gap-2 text-sm font-semibold">
+            <GripHorizontal className="size-4 shrink-0 text-muted-foreground" />
+            <span className="truncate">{title}</span>
+          </div>
+          <div className="mt-0.5 text-xs text-muted-foreground">{timespan}</div>
+        </div>
+        <TooltipIconButton label="删除图表" onClick={onRemove}>
+          <X className="size-4" />
+        </TooltipIconButton>
+      </div>
+      <div className="flex min-h-0 flex-1 flex-col gap-2 p-2">
+        <div className="min-h-0 flex-1">
+          {chart.type === "bandwidth" ? (
+            <EChartPanel option={bandwidthChartOption(bandwidthSeries)} />
+          ) : (
+            <EChartPanel option={pingChartOption(pingSeries)} />
+          )}
+        </div>
+        {chart.type === "bandwidth" ? (
+          <BandwidthStats series={bandwidthSeries} />
+        ) : (
+          <PingStats series={pingSeries} />
+        )}
+      </div>
+    </div>
+  )
+}
+
+function EChartPanel({ option }: { option: EChartsOption }) {
+  return (
+    <ReactEChartsCore
+      echarts={echarts}
+      option={option}
+      notMerge
+      lazyUpdate
+      style={{ height: "100%", minHeight: 220, width: "100%" }}
+      opts={{ renderer: "canvas" }}
+    />
+  )
+}
+
+function BandwidthStats({ series }: { series?: BandwidthSeries }) {
+  const incoming = numericStats(series?.points.map((point) => point.rxBitsPerSecond) ?? [])
+  const outgoing = numericStats(series?.points.map((point) => point.txBitsPerSecond) ?? [])
+  const incomingTotal = totalBytesFromBitRate(series?.points ?? [], (point) => point.rxBitsPerSecond)
+  const outgoingTotal = totalBytesFromBitRate(series?.points ?? [], (point) => point.txBitsPerSecond)
+  return (
+    <ChartStatsTable
+      labelHeader="方向"
+      rows={[
+        {
+          label: "Incoming",
+          colorClassName: "bg-blue-600",
+          stats: incoming,
+          formatter: formatBitRate,
+          total: formatBytes(incomingTotal),
+        },
+        {
+          label: "Outgoing",
+          colorClassName: "bg-green-600",
+          stats: outgoing,
+          formatter: formatBitRate,
+          total: formatBytes(outgoingTotal),
+        },
+      ]}
+    />
+  )
+}
+
+function PingStats({ series }: { series?: PingSeries }) {
+  const latency = numericStats(series?.points.map((point) => point.latencyMs) ?? [])
+  const loss = numericStats(series?.points.map((point) => point.lossPercent) ?? [])
+  return (
+    <ChartStatsTable
+      labelHeader="指标"
+      rows={[
+        {
+          label: "Latency",
+          colorClassName: "bg-blue-600",
+          stats: latency,
+          formatter: formatLatency,
+        },
+        {
+          label: "Loss",
+          colorClassName: "bg-red-600",
+          stats: loss,
+          formatter: formatPercent,
+        },
+      ]}
+    />
+  )
+}
+
+function ChartStatsTable({
+  labelHeader,
+  rows,
+}: {
+  labelHeader: string
+  rows: Array<{
+    label: string
+    colorClassName: string
+    stats: NumericStats
+    formatter: (value: number) => string
+    total?: string
+  }>
+}) {
+  const hasTotal = rows.some((row) => row.total)
+  return (
+    <div className="max-w-full overflow-x-auto rounded-md border bg-muted/25">
+      <table className="w-full min-w-[30rem] text-left text-[11px]">
+        <thead className="border-b text-muted-foreground">
+          <tr>
+            <th className="px-2 py-1.5 font-medium">{labelHeader}</th>
+            <th className="px-2 py-1.5 text-right font-medium">Min</th>
+            <th className="px-2 py-1.5 text-right font-medium">Avg</th>
+            <th className="px-2 py-1.5 text-right font-medium">Max</th>
+            <th className="px-2 py-1.5 text-right font-medium">Last</th>
+            {hasTotal ? <th className="px-2 py-1.5 text-right font-medium">Total</th> : null}
+          </tr>
+        </thead>
+        <tbody className="divide-y">
+          {rows.map((row) => (
+            <tr key={row.label}>
+              <td className="px-2 py-1.5 font-medium">
+                <span className="inline-flex items-center gap-1.5">
+                  <span className={cn("size-2 rounded-full", row.colorClassName)} />
+                  {row.label}
+                </span>
+              </td>
+              <td className="px-2 py-1.5 text-right font-mono">{formatStat(row.stats.min, row.formatter)}</td>
+              <td className="px-2 py-1.5 text-right font-mono">{formatStat(row.stats.avg, row.formatter)}</td>
+              <td className="px-2 py-1.5 text-right font-mono">{formatStat(row.stats.max, row.formatter)}</td>
+              <td className="px-2 py-1.5 text-right font-mono">{formatStat(row.stats.last, row.formatter)}</td>
+              {hasTotal ? <td className="px-2 py-1.5 text-right font-mono">{row.total ?? "-"}</td> : null}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  )
+}
+
+function bandwidthChartOption(series?: BandwidthSeries): EChartsOption {
+  const points = series?.points ?? []
+  return baseChartOption({
+    emptyText: "暂无带宽数据",
+    legend: ["Incoming", "Outgoing"],
+    yAxis: [
+      {
+        type: "value",
+        name: "bit/s",
+        axisLabel: { formatter: (value: number) => formatBitRate(value), color: "#64748b" },
+        splitLine: { lineStyle: { color: "rgba(148, 163, 184, 0.22)" } },
+      },
+    ],
+    series: [
+      {
+        name: "Incoming",
+        type: "line",
+        smooth: false,
+        showSymbol: false,
+        sampling: "lttb",
+        data: points.map((point) => [point.timestamp * 1000, point.rxBitsPerSecond]),
+        lineStyle: { width: 2, color: "#2563eb" },
+        itemStyle: { color: "#2563eb" },
+        areaStyle: { color: "rgba(37, 99, 235, 0.18)" },
+      },
+      {
+        name: "Outgoing",
+        type: "line",
+        smooth: false,
+        showSymbol: false,
+        sampling: "lttb",
+        data: points.map((point) => [point.timestamp * 1000, point.txBitsPerSecond]),
+        lineStyle: { width: 2, color: "#16a34a" },
+        itemStyle: { color: "#16a34a" },
+        areaStyle: { color: "rgba(22, 163, 74, 0.16)" },
+      },
+    ],
+  })
+}
+
+function pingChartOption(series?: PingSeries): EChartsOption {
+  const points = series?.points ?? []
+  return baseChartOption({
+    emptyText: "暂无 Ping 数据",
+    legend: ["延迟", "丢包"],
+    yAxis: [
+      {
+        type: "value",
+        name: "ms",
+        axisLabel: { formatter: "{value} ms", color: "#64748b" },
+        splitLine: { lineStyle: { color: "rgba(148, 163, 184, 0.22)" } },
+      },
+      {
+        type: "value",
+        name: "%",
+        min: 0,
+        max: 100,
+        axisLabel: { formatter: "{value}%", color: "#64748b" },
+        splitLine: { show: false },
+      },
+    ],
+    series: [
+      {
+        name: "延迟",
+        type: "line",
+        smooth: false,
+        showSymbol: false,
+        sampling: "lttb",
+        data: points.map((point) => [point.timestamp * 1000, point.latencyMs]),
+        lineStyle: { width: 2, color: "#2563eb" },
+        itemStyle: { color: "#2563eb" },
+      },
+      {
+        name: "丢包",
+        type: "line",
+        yAxisIndex: 1,
+        smooth: false,
+        showSymbol: false,
+        sampling: "lttb",
+        data: points.map((point) => [point.timestamp * 1000, point.lossPercent]),
+        lineStyle: { width: 2, color: "#dc2626" },
+        itemStyle: { color: "#dc2626" },
+      },
+    ],
+  })
+}
+
+function baseChartOption({
+  emptyText,
+  legend,
+  yAxis,
+  series,
+}: {
+  emptyText: string
+  legend: string[]
+  yAxis: EChartsOption["yAxis"]
+  series: EChartsOption["series"]
+}): EChartsOption {
+  return {
+    animation: false,
+    backgroundColor: "transparent",
+    color: ["#2563eb", "#dc2626"],
+    grid: { left: 66, right: Array.isArray(yAxis) && yAxis.length > 1 ? 58 : 22, top: 40, bottom: 48 },
+    legend: {
+      data: legend,
+      top: 4,
+      right: 4,
+      textStyle: { color: "#64748b" },
+      itemHeight: 8,
+      itemWidth: 16,
+    },
+    tooltip: {
+      trigger: "axis",
+      confine: true,
+      axisPointer: {
+        type: "cross",
+        label: {
+          backgroundColor: "#0f172a",
+        },
+      },
+    },
+    xAxis: {
+      type: "time",
+      axisLabel: {
+        color: "#64748b",
+        hideOverlap: true,
+      },
+      axisLine: { lineStyle: { color: "rgba(148, 163, 184, 0.35)" } },
+      axisTick: { lineStyle: { color: "rgba(148, 163, 184, 0.35)" } },
+      splitLine: { show: false },
+    },
+    yAxis,
+    series,
+    graphic:
+      Array.isArray(series) && series.every((item) => Array.isArray(item.data) && item.data.length === 0)
+        ? {
+            type: "text",
+            left: "center",
+            top: "middle",
+            style: {
+              text: emptyText,
+              fill: "#64748b",
+              fontSize: 13,
+            },
+          }
+        : undefined,
+  }
 }
 
 function MonitorSubNavigation({
@@ -1955,6 +2832,180 @@ function fileName(path: string): string {
   return path.split("/").pop() || path
 }
 
+function loadDashboards(): MonitorDashboard[] {
+  try {
+    const raw = window.localStorage.getItem(DASHBOARD_STORAGE_KEY)
+    if (!raw) {
+      return [createDashboard("默认 Dashboard")]
+    }
+    const parsed = JSON.parse(raw) as unknown
+    if (!Array.isArray(parsed)) {
+      return [createDashboard("默认 Dashboard")]
+    }
+    const dashboards = parsed
+      .map(normalizeDashboard)
+      .filter((dashboard): dashboard is MonitorDashboard => dashboard !== null)
+    return dashboards.length > 0 ? dashboards : [createDashboard("默认 Dashboard")]
+  } catch {
+    return [createDashboard("默认 Dashboard")]
+  }
+}
+
+function loadActiveDashboardId(): string {
+  return window.localStorage.getItem(ACTIVE_DASHBOARD_STORAGE_KEY) ?? ""
+}
+
+function normalizeDashboard(value: unknown): MonitorDashboard | null {
+  if (!value || typeof value !== "object") {
+    return null
+  }
+  const raw = value as Partial<MonitorDashboard>
+  if (typeof raw.id !== "string" || typeof raw.name !== "string") {
+    return null
+  }
+  const charts = Array.isArray(raw.charts)
+    ? raw.charts.filter(isDashboardChart)
+    : []
+  const layouts =
+    raw.layouts && typeof raw.layouts === "object"
+      ? normalizeDashboardLayouts(raw.layouts, charts, raw.layoutVersion)
+      : createLayouts(charts)
+  return {
+    id: raw.id,
+    name: raw.name || "Dashboard",
+    timespan: typeof raw.timespan === "string" ? raw.timespan : "1h",
+    charts,
+    layouts,
+    layoutVersion: DASHBOARD_LAYOUT_VERSION,
+  }
+}
+
+function isDashboardChart(value: unknown): value is DashboardChart {
+  if (!value || typeof value !== "object") {
+    return false
+  }
+  const raw = value as Partial<DashboardChart>
+  return (
+    typeof raw.id === "string" &&
+    (raw.type === "bandwidth" || raw.type === "ping") &&
+    typeof raw.target === "string"
+  )
+}
+
+function createDashboard(name: string): MonitorDashboard {
+  return {
+    id: createId("dashboard"),
+    name,
+    timespan: "1h",
+    charts: [],
+    layouts: {},
+    layoutVersion: DASHBOARD_LAYOUT_VERSION,
+  }
+}
+
+function createId(prefix: string): string {
+  const random =
+    typeof crypto !== "undefined" && "randomUUID" in crypto
+      ? crypto.randomUUID()
+      : Math.random().toString(36).slice(2)
+  return `${prefix}-${random}`
+}
+
+function createLayouts(charts: DashboardChart[]): Layouts {
+  const layouts: Layouts = {}
+  for (const [breakpoint, columns] of Object.entries(DASHBOARD_COLUMNS)) {
+    layouts[breakpoint] = charts.map((chart, index) => defaultLayoutForIndex(index, columns, chart.id))
+  }
+  return layouts
+}
+
+function normalizeDashboardLayouts(
+  layouts: Layouts,
+  charts: DashboardChart[],
+  layoutVersion: number | undefined,
+): Layouts {
+  if (layoutVersion === DASHBOARD_LAYOUT_VERSION) {
+    return layouts
+  }
+  const knownIds = new Set(charts.map((chart) => chart.id))
+  const migrated: Layouts = {}
+  for (const [breakpoint, columns] of Object.entries(DASHBOARD_COLUMNS)) {
+    const legacyColumns = LEGACY_DASHBOARD_COLUMNS[breakpoint as keyof typeof LEGACY_DASHBOARD_COLUMNS] ?? columns
+    const scale = columns / legacyColumns
+    migrated[breakpoint] = (layouts[breakpoint] ?? [])
+      .filter((item) => knownIds.has(item.i))
+      .map((item) => {
+        const width = Math.min(columns, Math.max(defaultDashboardItemWidth(columns), Math.round(item.w * scale)))
+        return {
+          ...item,
+          x: Math.max(0, Math.min(columns - width, Math.round(item.x * scale))),
+          y: item.y,
+          w: width,
+          minW: Math.min(4, columns),
+        }
+      })
+  }
+  return migrated
+}
+
+function ensureLayoutsForCharts(dashboard: MonitorDashboard): Layouts {
+  const knownIds = new Set(dashboard.charts.map((chart) => chart.id))
+  const layouts: Layouts = {}
+  for (const [breakpoint, columns] of Object.entries(DASHBOARD_COLUMNS)) {
+    const existing = dashboard.layouts[breakpoint] ?? []
+    const used = new Set<string>()
+    const next: LayoutItem[] = []
+    for (const item of existing) {
+      if (knownIds.has(item.i)) {
+        next.push(item)
+        used.add(item.i)
+      }
+    }
+    dashboard.charts.forEach((chart, index) => {
+      if (!used.has(chart.id)) {
+        next.push(defaultLayoutForIndex(index, columns, chart.id))
+      }
+    })
+    layouts[breakpoint] = next
+  }
+  return layouts
+}
+
+function addChartToLayouts(layouts: Layouts, index: number, id: string): Layouts {
+  const next: Layouts = {}
+  for (const [breakpoint, columns] of Object.entries(DASHBOARD_COLUMNS)) {
+    next[breakpoint] = [...(layouts[breakpoint] ?? []), defaultLayoutForIndex(index, columns, id)]
+  }
+  return next
+}
+
+function removeChartFromLayouts(layouts: Layouts, id: string): Layouts {
+  return Object.fromEntries(
+    Object.entries(layouts).map(([breakpoint, layout]) => [
+      breakpoint,
+      (layout ?? []).filter((item) => item.i !== id),
+    ]),
+  )
+}
+
+function defaultLayoutForIndex(index: number, columns: number, id = `chart-${index}`): LayoutItem {
+  const width = defaultDashboardItemWidth(columns)
+  const height = 12
+  return {
+    i: id,
+    x: (index * width) % columns,
+    y: Math.floor((index * width) / columns) * height,
+    w: width,
+    h: height,
+    minW: Math.min(4, columns),
+    minH: 10,
+  }
+}
+
+function defaultDashboardItemWidth(columns: number): number {
+  return columns >= 8 ? 4 : columns
+}
+
 function formatBytes(value: number | null | undefined): string {
   if (value == null) {
     return "-"
@@ -2048,6 +3099,60 @@ function formatAxisValue(value: number, formatter?: (value: number) => string): 
     return value.toFixed(1)
   }
   return formatter(value)
+}
+
+function numericStats(values: Array<number | null | undefined>): NumericStats {
+  const finite = values.filter((value): value is number => value != null && Number.isFinite(value))
+  if (finite.length === 0) {
+    return { min: null, avg: null, max: null, last: null }
+  }
+  const total = finite.reduce((sum, value) => sum + value, 0)
+  return {
+    min: Math.min(...finite),
+    avg: total / finite.length,
+    max: Math.max(...finite),
+    last: finite[finite.length - 1],
+  }
+}
+
+function totalBytesFromBitRate(
+  points: BandwidthPoint[],
+  selector: (point: BandwidthPoint) => number | null,
+): number | null {
+  let total = 0
+  let hasValue = false
+  for (let index = 1; index < points.length; index += 1) {
+    const previous = points[index - 1]
+    const current = points[index]
+    const seconds = current.timestamp - previous.timestamp
+    if (seconds <= 0 || !Number.isFinite(seconds)) {
+      continue
+    }
+    const previousRate = selector(previous)
+    const currentRate = selector(current)
+    const rate =
+      previousRate != null && currentRate != null
+        ? (previousRate + currentRate) / 2
+        : (currentRate ?? previousRate)
+    if (rate == null || !Number.isFinite(rate)) {
+      continue
+    }
+    total += (Math.max(0, rate) * seconds) / 8
+    hasValue = true
+  }
+  return hasValue ? total : null
+}
+
+function formatStat(value: number | null, formatter: (value: number) => string): string {
+  return value == null ? "-" : formatter(value)
+}
+
+function formatLatency(value: number): string {
+  return `${value.toFixed(1)} ms`
+}
+
+function formatPercent(value: number): string {
+  return `${value.toFixed(1)}%`
 }
 
 function formatBitRate(bitsPerSecond: number): string {
@@ -2173,6 +3278,22 @@ function pageFromPath(pathname: string): PageId {
   }
   const match = Object.entries(pagePaths).find(([, path]) => path === normalized)
   return match ? (match[0] as PageId) : "monitor"
+}
+
+function dashboardIdFromPath(pathname: string): string | null {
+  const normalized = pathname.replace(/\/+$/, "") || "/"
+  const match = normalized.match(/^\/monitor\/dashboard\/([^/]+)$/)
+  return match ? decodeURIComponent(match[1]) : null
+}
+
+function dashboardPath(dashboardId: string): string {
+  return `/monitor/dashboard/${encodeURIComponent(dashboardId)}`
+}
+
+function pushMonitorPath(path: string) {
+  if (window.location.pathname !== path) {
+    window.history.pushState({ page: "monitor" }, "", path)
+  }
 }
 
 function monitorViewFromPath(pathname: string): MonitorViewId {

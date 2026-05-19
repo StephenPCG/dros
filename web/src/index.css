@@ -1,3 +1,5 @@
+@import "react-grid-layout/css/styles.css";
+@import "react-resizable/css/styles.css";
 @import "tailwindcss";
 
 @theme {
@@ -67,4 +69,36 @@ input,
 textarea,
 select {
   font: inherit;
+}
+
+.react-grid-layout {
+  position: relative;
+}
+
+.react-grid-item {
+  transition:
+    left 180ms ease,
+    top 180ms ease,
+    width 180ms ease,
+    height 180ms ease;
+}
+
+.react-grid-item.react-grid-placeholder {
+  border-radius: var(--radius);
+  background: hsl(var(--ring) / 0.18);
+  opacity: 1;
+}
+
+.react-grid-item > .react-resizable-handle::after {
+  border-color: hsl(var(--muted-foreground));
+}
+
+.react-grid-item.cssTransforms {
+  transition-property: transform, width, height;
+}
+
+.react-grid-item.resizing,
+.react-grid-item.react-draggable-dragging {
+  z-index: 10;
+  transition: none;
 }

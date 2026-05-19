@@ -14,6 +14,8 @@ from dros.settings import DrosSettings
 
 TIMESPANS: dict[str, tuple[str, int]] = {
     "1h": ("1h", 60 * 60),
+    "4h": ("4h", 4 * 60 * 60),
+    "12h": ("12h", 12 * 60 * 60),
     "1d": ("1d", 24 * 60 * 60),
     "1w": ("1w", 7 * 24 * 60 * 60),
     "1m": ("1m", 30 * 24 * 60 * 60),
@@ -108,19 +110,22 @@ def collect_ping_series(
     latency = _single_value_rows(files.ping_latency.get(target), seconds, runner)
     loss = _single_value_rows(files.ping_loss.get(target), seconds, runner)
     timestamps = sorted(set(latency) | set(loss))
+    points = []
+    for timestamp in timestamps:
+        loss_value = loss.get(timestamp)
+        points.append(
+            {
+                "timestamp": timestamp,
+                "latencyMs": latency.get(timestamp),
+                "lossPercent": None if loss_value is None else loss_value * 100.0,
+            }
+        )
     return {
         "target": target,
         "timespan": timespan,
         "latencyUnit": "ms",
         "lossUnit": "%",
-        "points": [
-            {
-                "timestamp": timestamp,
-                "latencyMs": latency.get(timestamp),
-                "lossPercent": loss.get(timestamp),
-            }
-            for timestamp in timestamps
-        ],
+        "points": points,
     }
 
 
