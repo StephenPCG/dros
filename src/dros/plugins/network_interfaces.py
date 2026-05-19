@@ -477,6 +477,8 @@ def _validate_openvpn(obj: ConfigObject, config: InterfaceConfig, errors: list[s
             f"Interface/{obj.name}: type openvpn requires exactly one of "
             "spec.config or spec.configFile"
         )
+    for index, line in enumerate(config.extra_config_lines):
+        _validate_single_line(obj, f"spec.extraConfigLines[{index}]", line, errors)
 
 
 def _validate_openvpn_listen(
@@ -1138,8 +1140,10 @@ def _render_openvpn_config(
     config: InterfaceConfig,
 ) -> str:
     if config.config is not None:
-        return _with_trailing_newline(config.config)
-    return _read_openvpn_config_file(context, obj, config)[0]
+        content = _with_trailing_newline(config.config)
+    else:
+        content = _read_openvpn_config_file(context, obj, config)[0]
+    return _append_openvpn_extra_config_lines(content, config)
 
 
 def _write_openvpn_config(
@@ -1157,6 +1161,7 @@ def _write_openvpn_config(
             source,
             _openvpn_config_path(obj.name),
         )
+    content = _append_openvpn_extra_config_lines(content, config)
     return context.executor.write_file(
         _openvpn_config_path(obj.name),
         content,
@@ -1176,6 +1181,13 @@ def _read_openvpn_config_file(
     except FileNotFoundError as exc:
         raise ValueError(f"Interface/{obj.name}: openvpn configFile not found: {source}") from exc
     return _with_trailing_newline(content), source
+
+
+def _append_openvpn_extra_config_lines(content: str, config: InterfaceConfig) -> str:
+    content = _with_trailing_newline(content)
+    if not config.extra_config_lines:
+        return content
+    return content + "".join(_with_trailing_newline(line) for line in config.extra_config_lines)
 
 
 def _openvpn_source_is_newer_than_target(

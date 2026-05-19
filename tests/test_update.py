@@ -1486,6 +1486,44 @@ spec:
     assert ovpn == "client\nremote vpn.example.net 1194\n"
 
 
+def test_update_interface_openvpn_appends_extra_config_lines_to_config_file(
+    tmp_path: Path,
+) -> None:
+    settings = _settings(tmp_path)
+    settings.paths.configs.mkdir(parents=True)
+    (settings.paths.configs / "client.conf").write_text(
+        "client\nremote vpn.example.net 1194\n",
+        encoding="utf-8",
+    )
+    (settings.paths.configs / "openvpn.yaml").write_text(
+        """
+kind: Interface
+metadata:
+  name: ovpn-client
+spec:
+  type: openvpn
+  configFile: client.conf
+  extraConfigLines:
+    - route-noexec
+    - pull-filter ignore redirect-gateway
+""".lstrip(),
+        encoding="utf-8",
+    )
+
+    run_update(settings, target="iface/ovpn-client", console=_console(StringIO()))
+
+    ovpn = (settings.sys_root / "etc/dros/openvpn/ovpn-client.ovpn").read_text(
+        encoding="utf-8"
+    )
+    assert (
+        ovpn
+        == "client\n"
+        "remote vpn.example.net 1194\n"
+        "route-noexec\n"
+        "pull-filter ignore redirect-gateway\n"
+    )
+
+
 def test_update_interface_openvpn_reload_when_config_file_content_changes(tmp_path: Path) -> None:
     settings = _settings(tmp_path)
     settings.paths.configs.mkdir(parents=True)

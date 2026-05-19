@@ -771,6 +771,10 @@ class InterfaceConfig(BaseModel):
         None,
         validation_alias=AliasChoices("config_file", "configFile"),
     )
+    extra_config_lines: list[str] = Field(
+        default_factory=list,
+        validation_alias=AliasChoices("extra_config_lines", "extraConfigLines"),
+    )
     crl_file: str | None = Field(
         None,
         validation_alias=AliasChoices("crl_file", "crlFile"),

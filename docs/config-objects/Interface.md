@@ -207,6 +207,8 @@ metadata:
 spec:
   type: openvpn
   configFile: /opt/gateway/ovpn/lab/client.conf
+  extraConfigLines:
+    - route-noexec
   crlFile: /opt/gateway/ovpn/lab/pki/crl.pem
   listen:
     proto: udp
@@ -605,6 +607,24 @@ YAML 文件所在目录读取。
 `config` 和 `configFile` 必须二选一，不能同时设置。
 
 默认值：无。
+
+### `spec.extraConfigLines`
+
+仅 `type: openvpn` 使用。追加到最终生成的
+`/etc/dros/openvpn/<name>.ovpn` 末尾，每个列表项对应一行 OpenVPN 配置。
+
+这个字段主要用于 `configFile` 场景：外部 `.ovpn` 文件可以保持原样，DROS 在托管副本中
+追加本机需要的指令，例如：
+
+```yaml
+extraConfigLines:
+  - route-noexec
+  - pull-filter ignore redirect-gateway
+```
+
+同样也适用于 inline `config`。每一项必须是单行字符串。
+
+默认值：`[]`。
 
 ### `spec.crlFile`
 
