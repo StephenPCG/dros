@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react"
+import { useEffect, useMemo, useRef, useState } from "react"
 import type { FormEvent, ReactNode } from "react"
 import ReactEChartsCore from "echarts-for-react/lib/core"
 import type { EChartsOption } from "echarts"
@@ -10,6 +10,7 @@ import {
   Activity,
   Ban,
   BarChart3,
+  ChevronDown,
   ChevronLeft,
   Download,
   GripHorizontal,
@@ -225,6 +226,12 @@ type DashboardChartSeries = BandwidthSeries | PingSeries | MetricSeries
 type AddChartForm = {
   type: DashboardChartType
   target: string
+}
+
+type DropdownOption = {
+  value: string
+  label: string
+  disabled?: boolean
 }
 
 type NumericStats = {
@@ -686,6 +693,7 @@ function MonitorPage() {
   const [addChartOpen, setAddChartOpen] = useState(false)
   const [moreOpen, setMoreOpen] = useState(false)
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false)
+  const dashboardMoreRef = useRef<HTMLDivElement | null>(null)
   const activeDashboard = dashboards.find((dashboard) => dashboard.id === activeDashboardId) ?? dashboards[0]
   const timespans = targets?.timespans.length ? targets.timespans : DEFAULT_TIMESPANS
   const chartsKey = activeDashboard?.charts
@@ -858,6 +866,32 @@ function MonitorPage() {
       window.clearInterval(timer)
     }
   }, [activeDashboard?.id, activeDashboard?.timespan, activeMonitorTab, chartsKey])
+
+  useEffect(() => {
+    if (!moreOpen) {
+      return
+    }
+    function handleDashboardMorePointerDown(event: PointerEvent) {
+      const target = event.target
+      if (!(target instanceof Node)) {
+        return
+      }
+      if (!dashboardMoreRef.current?.contains(target)) {
+        setMoreOpen(false)
+      }
+    }
+    function handleDashboardMoreKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        setMoreOpen(false)
+      }
+    }
+    document.addEventListener("pointerdown", handleDashboardMorePointerDown)
+    document.addEventListener("keydown", handleDashboardMoreKeyDown)
+    return () => {
+      document.removeEventListener("pointerdown", handleDashboardMorePointerDown)
+      document.removeEventListener("keydown", handleDashboardMoreKeyDown)
+    }
+  }, [moreOpen])
 
   function updateActiveDashboard(updater: (dashboard: MonitorDashboard) => MonitorDashboard) {
     if (!activeDashboard) {
@@ -1048,25 +1082,19 @@ function MonitorPage() {
               </div>
             </div>
             <div className="flex flex-wrap items-center gap-2">
-              <select
-                className="h-9 rounded-md border bg-background px-2 text-sm outline-none focus:border-ring focus:ring-2 focus:ring-ring/20"
+              <DropdownSelect
+                ariaLabel="Dashboard 时间段"
+                className="w-24"
                 value={activeDashboard.timespan}
-                onChange={(event) =>
-                  updateActiveDashboard((dashboard) => ({ ...dashboard, timespan: event.target.value }))
-                }
-                aria-label="Dashboard 时间段"
-              >
-                {timespans.map((timespan) => (
-                  <option key={timespan.id} value={timespan.id}>
-                    {timespan.label}
-                  </option>
-                ))}
-              </select>
+                options={timespans.map((timespan) => ({ value: timespan.id, label: timespan.label }))}
+                onChange={(timespan) => updateActiveDashboard((dashboard) => ({ ...dashboard, timespan }))}
+                menuAlign="right"
+              />
               <Button variant="outline" onClick={() => setAddChartOpen(true)} disabled={loadingTargets}>
                 <BarChart3 className="size-4" />
                 添加图表
               </Button>
-              <div className="relative">
+              <div ref={dashboardMoreRef} className="relative">
                 <TooltipIconButton label="更多" onClick={() => setMoreOpen((current) => !current)}>
                   <MoreVertical className="size-4" />
                 </TooltipIconButton>
@@ -1211,22 +1239,18 @@ function AddDashboardChartModal({
             </button>
           ))}
         </div>
-        <label className="block space-y-2">
+        <div className="space-y-2">
           <span className="text-sm font-medium">{dashboardTargetLabel(form.type)}</span>
-          <select
-            className="h-10 w-full rounded-md border bg-background px-3 text-sm outline-none transition-colors focus:border-ring focus:ring-2 focus:ring-ring/20"
+          <DropdownSelect
+            ariaLabel={dashboardTargetLabel(form.type)}
+            buttonClassName="h-10"
+            className="w-full"
             value={form.target}
-            onChange={(event) => setForm((current) => ({ ...current, target: event.target.value }))}
-            required
-          >
-            {options.length === 0 ? <option value="">暂无可选项</option> : null}
-            {options.map((target) => (
-              <option key={target} value={target}>
-                {target}
-              </option>
-            ))}
-          </select>
-        </label>
+            options={options.map((target) => ({ value: target, label: target }))}
+            onChange={(target) => setForm((current) => ({ ...current, target }))}
+            placeholder="暂无可选项"
+          />
+        </div>
         <div className="flex justify-end gap-2">
           <Button variant="outline" type="button" onClick={onClose}>
             取消
@@ -3304,6 +3328,113 @@ function TooltipIconButton({
         {label}
       </span>
     </span>
+  )
+}
+
+function DropdownSelect({
+  ariaLabel,
+  value,
+  options,
+  onChange,
+  placeholder = "请选择",
+  className,
+  buttonClassName,
+  menuAlign = "left",
+}: {
+  ariaLabel: string
+  value: string
+  options: DropdownOption[]
+  onChange: (value: string) => void
+  placeholder?: string
+  className?: string
+  buttonClassName?: string
+  menuAlign?: "left" | "right"
+}) {
+  const [open, setOpen] = useState(false)
+  const rootRef = useRef<HTMLDivElement | null>(null)
+  const selected = options.find((option) => option.value === value)
+  const disabled = options.length === 0
+
+  useEffect(() => {
+    if (!open) {
+      return
+    }
+    function handleDropdownPointerDown(event: PointerEvent) {
+      const target = event.target
+      if (!(target instanceof Node)) {
+        return
+      }
+      if (!rootRef.current?.contains(target)) {
+        setOpen(false)
+      }
+    }
+    function handleDropdownKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        setOpen(false)
+      }
+    }
+    document.addEventListener("pointerdown", handleDropdownPointerDown)
+    document.addEventListener("keydown", handleDropdownKeyDown)
+    return () => {
+      document.removeEventListener("pointerdown", handleDropdownPointerDown)
+      document.removeEventListener("keydown", handleDropdownKeyDown)
+    }
+  }, [open])
+
+  return (
+    <div ref={rootRef} className={cn("relative", className)}>
+      <button
+        className={cn(
+          "flex h-9 w-full min-w-0 items-center justify-between gap-2 rounded-md border bg-background px-3 text-sm",
+          "outline-none transition-colors hover:bg-muted focus:border-ring focus:ring-2 focus:ring-ring/20",
+          "disabled:cursor-not-allowed disabled:opacity-60",
+          buttonClassName,
+        )}
+        type="button"
+        aria-label={ariaLabel}
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        disabled={disabled}
+        onClick={() => setOpen((current) => !current)}
+      >
+        <span className="truncate">{selected?.label ?? placeholder}</span>
+        <ChevronDown
+          className={cn("size-4 shrink-0 text-muted-foreground transition-transform", open && "rotate-180")}
+        />
+      </button>
+      {open ? (
+        <div
+          className={cn(
+            "absolute top-[calc(100%+0.25rem)] z-30 max-h-72 min-w-full overflow-auto rounded-md border bg-background py-1 shadow-lg",
+            menuAlign === "right" ? "right-0" : "left-0",
+          )}
+          role="listbox"
+          aria-label={ariaLabel}
+        >
+          {options.map((option) => (
+            <button
+              key={option.value}
+              className={cn(
+                "flex h-9 w-full min-w-0 items-center justify-between gap-2 px-3 text-left text-sm transition-colors",
+                "hover:bg-muted disabled:cursor-not-allowed disabled:opacity-50",
+                option.value === value ? "bg-muted text-foreground" : "text-muted-foreground hover:text-foreground",
+              )}
+              type="button"
+              role="option"
+              aria-selected={option.value === value}
+              disabled={option.disabled}
+              onClick={() => {
+                onChange(option.value)
+                setOpen(false)
+              }}
+            >
+              <span className="truncate">{option.label}</span>
+              {option.value === value ? <span className="size-1.5 shrink-0 rounded-full bg-ring" /> : null}
+            </button>
+          ))}
+        </div>
+      ) : null}
+    </div>
   )
 }
 

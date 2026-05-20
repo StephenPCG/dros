@@ -83,6 +83,17 @@ def test_web_frontend_dashboard_supports_metric_charts_and_vertical_shared_cross
     assert "echarts.connect(groupId)" in source
 
 
+def test_web_frontend_dashboard_uses_custom_dropdowns_and_clickaway_menu() -> None:
+    source = (Path(__file__).resolve().parents[1] / "web/src/App.tsx").read_text(encoding="utf-8")
+
+    assert "<select" not in source
+    assert "</select>" not in source
+    assert "function DropdownSelect" in source
+    assert "dashboardMoreRef" in source
+    assert "handleDashboardMorePointerDown" in source
+    assert 'document.addEventListener("pointerdown", handleDashboardMorePointerDown)' in source
+
+
 def test_web_monitor_summary_requires_auth_and_reports_system_counters(tmp_path: Path) -> None:
     sysroot = tmp_path / "sysroot"
     (sysroot / "proc").mkdir(parents=True)
