@@ -34,6 +34,10 @@ any selected object is invalid.
 - `network.firewall` owns `Firewall` objects, `/etc/nftables.conf`, and the
   generated base nftables ruleset under `/etc/dros/nftables.d`.
 - `network.resolvconf` owns `ResolvConf` objects and `/etc/resolv.conf`.
+- `network.wgsd-coredns` owns `WgsdCoreDNS` objects, `/etc/dros/wgsd/Corefile`,
+  and `dros-wgsd-coredns.service` when `/usr/local/bin/coredns` is installed.
+  `gw bootstrap` does not install `wgsd-coredns`; use `gw install wgsd-coredns`
+  explicitly when needed.
 - `network.dnsmasq` owns `DnsmasqDNS`, `DnsmasqDHCP`, and
   `DnsmasqChinaNames` objects, dnsmasq include fragments, and the China Names
   refresh cron job.
@@ -125,6 +129,8 @@ Detailed ConfigObject references:
 - `docs/config-objects/RouteTable.md`
 - `docs/config-objects/SystemNetworkConfig.md`
 - `docs/config-objects/SystemMirrorConfig.md`
+- `docs/config-objects/WgsdCoreDNS.md`
+- `docs/config-objects/XfrmTransport.md`
 
 Defaults live in code, not in built-in ConfigObjects. A user object can provide
 only the fields it wants to override.

@@ -323,6 +323,22 @@ spec:
     - attempts:2
 """,
     ),
+    "WgsdCoreDNS": ConfigObjectCatalogEntry(
+        kind="WgsdCoreDNS",
+        example="""apiVersion: dros/v1alpha1
+kind: WgsdCoreDNS
+metadata:
+  name: system
+spec:
+  bind: 127.0.0.1
+  listen: 5304
+  interfaces:
+    - name: wg-foo
+      domain: foo.wg.natureself.site
+    - name: wg-bar
+      domain: bar.wg.natureself.site
+""",
+    ),
     "DockerContainer": ConfigObjectCatalogEntry(
         kind="DockerContainer",
         example="""apiVersion: dros/v1alpha1

@@ -57,6 +57,7 @@ from dros.plugins.network_xfrm import start_xfrm, stop_xfrm
 from dros.plugins.network_interfaces import tailscale_socket_path
 from dros.config_objects import XfrmTransportConfig
 from dros.web.auth import WebAuthStore, resolve_auth_db_path
+from dros.wgsd_install import WgsdBinarySpec, install_wgsd_binary, resolve_wgsd_binary
 
 console = Console()
 error_console = Console(stderr=True)
@@ -204,6 +205,35 @@ def tailscale_command(iface_name: str, tailscale_args: TailscaleArgs) -> None:
         error_console.print(f"[red]ts failed:[/red] {exc}")
         raise SystemExit(1) from exc
     raise SystemExit(result.returncode)
+
+
+@app.command(name="install")
+def install_command(target: str, source: str | None = None) -> None:
+    """Install optional external binaries used by DROS."""
+    try:
+        spec = resolve_wgsd_binary(target)
+        settings = _load_cli_settings()
+        _ensure_bootstrap_privileges(settings)
+        if source is None:
+            prompt_result = _prompt_wgsd_install_source(spec)
+            if prompt_result is None:
+                console.print(f"skipped install {spec.name}", markup=False)
+                return
+            source, source_is_archive = prompt_result
+        else:
+            source_is_archive = False
+        with _manual_cli_lock(settings):
+            path = install_wgsd_binary(
+                settings,
+                spec,
+                source=source,
+                source_is_archive=source_is_archive,
+                console=console,
+            )
+    except (OSError, RuntimeError, ValueError, subprocess.CalledProcessError) as exc:
+        error_console.print(f"[red]install failed:[/red] {exc}")
+        raise SystemExit(1) from exc
+    console.print(f"[green]installed[/green] {spec.name}: {path}", markup=False)
 
 
 @app.command
@@ -678,6 +708,18 @@ def _strip_global_options(args: list[str]) -> list[str]:
 def _resolve_config_relative_path(base: Path, value: str) -> Path:
     path = Path(value).expanduser()
     return path if path.is_absolute() else base / path
+
+
+def _prompt_wgsd_install_source(spec: WgsdBinarySpec) -> tuple[str, bool] | None:
+    console.print(f"{spec.name} is optional and is not bundled with DROS.", markup=False)
+    console.print(f"GitHub releases: {spec.release_page}", markup=False)
+    console.print(f"Default linux/amd64 download: {spec.default_download_url}", markup=False)
+    answer = input("Download from GitHub? [y/N] or enter local/URL binary: ").strip()
+    if answer.lower() in {"y", "yes"}:
+        return spec.default_download_url, True
+    if not answer or answer.lower() in {"n", "no"}:
+        return None
+    return answer, False
 
 
 def _load_cli_settings() -> DrosSettings:

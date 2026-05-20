@@ -121,6 +121,97 @@ def test_config_create_accepts_docker_aliases(capsys) -> None:
     assert "hostNetworkAddress" in output
 
 
+def test_install_command_passes_custom_wgsd_source(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    settings_file = tmp_path / "settings.yaml"
+    settings_file.write_text(
+        f"""
+sysRoot: {tmp_path / "sysroot"}
+paths:
+  configs: {tmp_path / "configs"}
+  logs: {tmp_path / "logs"}
+  run: {tmp_path / "run"}
+""".lstrip(),
+        encoding="utf-8",
+    )
+    calls: list[tuple[str, str, bool]] = []
+
+    def fake_ensure_bootstrap_privileges(settings: DrosSettings) -> None:
+        assert settings.sys_root == tmp_path / "sysroot"
+
+    def fake_install_wgsd_binary(
+        settings: DrosSettings,
+        spec: object,
+        *,
+        source: str,
+        source_is_archive: bool,
+        console: object,
+    ) -> Path:
+        calls.append((getattr(spec, "name"), source, source_is_archive))
+        return Path("/usr/local/bin/wgsd-client")
+
+    monkeypatch.setattr(cli_main, "_ensure_bootstrap_privileges", fake_ensure_bootstrap_privileges)
+    monkeypatch.setattr(cli_main, "install_wgsd_binary", fake_install_wgsd_binary)
+
+    assert (
+        cli_main.main(
+            [
+                "--settings",
+                str(settings_file),
+                "install",
+                "wgsd-client",
+                "https://mirror.example/wgsd-client",
+            ]
+        )
+        == 0
+    )
+    assert calls == [("wgsd-client", "https://mirror.example/wgsd-client", False)]
+
+
+def test_install_command_prompts_before_using_default_github_download(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    settings_file = tmp_path / "settings.yaml"
+    settings_file.write_text(
+        f"""
+sysRoot: {tmp_path / "sysroot"}
+paths:
+  configs: {tmp_path / "configs"}
+  logs: {tmp_path / "logs"}
+  run: {tmp_path / "run"}
+""".lstrip(),
+        encoding="utf-8",
+    )
+    calls: list[tuple[str, str, bool]] = []
+
+    monkeypatch.setattr(cli_main, "_ensure_bootstrap_privileges", lambda settings: None)
+    monkeypatch.setattr("builtins.input", lambda prompt="": "y")
+
+    def fake_install_wgsd_binary(
+        settings: DrosSettings,
+        spec: object,
+        *,
+        source: str,
+        source_is_archive: bool,
+        console: object,
+    ) -> Path:
+        calls.append((getattr(spec, "name"), source, source_is_archive))
+        return Path("/usr/local/bin/coredns")
+
+    monkeypatch.setattr(cli_main, "install_wgsd_binary", fake_install_wgsd_binary)
+
+    assert cli_main.main(["--settings", str(settings_file), "install", "wgsd-coredns"]) == 0
+    assert calls == [
+        (
+            "wgsd-coredns",
+            "https://github.com/jwhited/wgsd/releases/download/v0.3.6/"
+            "wgsd-coredns_0.3.6_linux_amd64.tar.gz",
+            True,
+        )
+    ]
 def test_config_create_accepts_collectd_alias(capsys) -> None:
     assert cli_main.main(["config", "create", "collectd"]) == 0
 

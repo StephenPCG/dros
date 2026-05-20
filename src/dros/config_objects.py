@@ -379,6 +379,21 @@ class ResolvConfConfig(BaseModel):
     options: list[str] = Field(default_factory=list)
 
 
+class WgsdCoreDNSInterfaceConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+    name: str = Field(min_length=1)
+    domain: str = Field(min_length=1)
+
+
+class WgsdCoreDNSConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+    bind: str = "127.0.0.1"
+    listen: int = Field(5304, ge=1, le=65535)
+    interfaces: list[WgsdCoreDNSInterfaceConfig] = Field(default_factory=list)
+
+
 class IPv6PDDownstreamConfig(BaseModel):
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
 

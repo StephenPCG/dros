@@ -1300,6 +1300,9 @@ spec:
 def test_update_wireguard_expands_allowed_ips_and_writes_wgsd_cron(tmp_path: Path) -> None:
     settings = _settings(tmp_path)
     settings.paths.configs.mkdir(parents=True)
+    binary = settings.sys_root / "usr/local/bin/wgsd-client"
+    binary.parent.mkdir(parents=True)
+    binary.write_bytes(b"\x7fELF wgsd-client")
     (settings.paths.configs / "ip-lists").mkdir()
     (settings.paths.configs / "ip-lists/china.v4.txt").write_text(
         "10.0.0.0/8\n",
@@ -1342,6 +1345,35 @@ spec:
     assert "AllowedIPs = 10.0.0.0/8, fd00::/8, 192.0.2.0/24\n" in wg_conf
     assert "*/5 * * * * root /usr/local/bin/wgsd-client" in cron
     assert "-device wg0 -dns 127.0.0.1:53 -zone wg.example." in cron
+
+
+def test_update_wireguard_skips_wgsd_cron_when_client_binary_is_missing(tmp_path: Path) -> None:
+    settings = _settings(tmp_path)
+    settings.paths.configs.mkdir(parents=True)
+    config_path = settings.paths.configs / "wg.yaml"
+    config_path.write_text(
+        """
+apiVersion: dros/v1alpha1
+kind: Interface
+metadata:
+  name: wg0
+spec:
+  type: wireguard
+  privateKey: private-key
+  wgsdClient:
+    dns: 127.0.0.1:5304
+    zone: wg.example.
+    schedule: "*/5 * * * *"
+""".lstrip(),
+        encoding="utf-8",
+    )
+    output = StringIO()
+
+    run_update(settings, target="iface/wg0", console=_console(output))
+
+    assert (settings.sys_root / "etc/wireguard/wg0.conf").exists()
+    assert not (settings.sys_root / "etc/cron.d/dros-wgsd-client-wg0").exists()
+    assert "warning: Interface/wg0: /usr/local/bin/wgsd-client is not installed" in output.getvalue()
 
 
 def test_update_wireguard_uses_addconf_when_only_wireguard_conf_changes(tmp_path: Path) -> None:

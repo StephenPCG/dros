@@ -572,7 +572,11 @@ wg set $IFACE private-key <privateKeyFile>
 
 ### `spec.wgsdClient`
 
-仅 `type: wireguard` 使用。配置后生成 `/etc/cron.d/dros-wgsd-client-<name>`。
+仅 `type: wireguard` 使用。配置后会尝试生成
+`/etc/cron.d/dros-wgsd-client-<name>`。DROS 不会在 `gw bootstrap` 中自动安装
+`wgsd-client`；需要先运行 `gw install wgsd-client` 将二进制安装到
+`/usr/local/bin/wgsd-client`。如果配置了 `wgsdClient` 但二进制不存在，`gw update`
+只输出 warning 并跳过 cron，WireGuard interface 本身仍会正常生成和应用。
 
 字段：
 

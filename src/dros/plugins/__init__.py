@@ -19,6 +19,7 @@ from . import (
     resolvconf,
     system_mirror,
     system_utilities,
+    wgsd_coredns,
 )
 
 
@@ -37,6 +38,7 @@ def create_default_registry() -> PluginRegistry:
     registry.register(config_resources.create_plugin())
     registry.register(system_utilities.create_plugin())
     registry.register(collectd.create_plugin())
+    registry.register(wgsd_coredns.create_plugin())
     registry.register(docker_core.create_plugin())
     registry.register(docker_resources.create_plugin())
     return registry
