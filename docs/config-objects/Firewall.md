@@ -55,6 +55,15 @@ spec:
           - gre
       forward:
         policy: accept
+  natRules:
+    - type: portmap
+      daddr: 10.20.255.8
+      proto: tcp
+      dport: 6443
+      to: 10.20.3.83
+      toPort: 6443
+      hairpin:
+        sourceNet: 10.20.0.0/16
 ```
 
 ## 字段
@@ -162,8 +171,30 @@ raw rule 中的 `iifgroup devgroup/<name>` 和 `oifgroup devgroup/<name>` 会解
 - `dport`：端口、端口集合或端口列表
 - `to`：DNAT/SNAT 目标
 - `toPort`：DNAT 目标端口
+- `hairpin`：可选。为 `portmap` 或 `ipmap` 生成 hairpin SNAT 规则
 - `rawRule`：raw NAT rule，设置后跳过结构化渲染
 - `forwardAllowRule`：配合 `rawRule` 写入 `portmap_forward`
+
+`portmap` 会生成 DNAT 规则、对应的 `portmap_forward` 放行规则，并在配置
+`hairpin` 时生成额外的 postrouting SNAT 规则。`ipmap` 也支持同样的
+`hairpin` 配置，但因为它是不按端口区分的 IP 映射，生成的 hairpin SNAT
+规则只匹配源网段和 DNAT 后的目标地址，不匹配协议/端口。
+
+`hairpin` 字段：
+
+- `sourceNet`：必填。需要做 hairpin SNAT 的源网段，例如 `10.20.0.0/16`。
+  DROS 不会从 DNAT 地址自动推导这个网段。
+- `snat`：可选，默认 `preserve-low24`。支持 `preserve-low24` 和 `to-address`。
+- `snatTo`：仅 `snat: to-address` 时必填，表示固定 SNAT 到哪个地址。
+
+`preserve-low24` 只支持 IPv4，会生成类似下面的规则，把源 IP 第一段改成
+`255`，保留后三段：
+
+```nft
+add rule inet dros_nat snat_postrouting ip saddr 10.20.0.0/16 ip daddr 10.20.3.83 tcp dport 6443 snat to ip saddr & 0.255.255.255 | 255.0.0.0
+```
+
+如果不配置 `hairpin`，DROS 不会生成对应 SNAT 规则。
 
 ### `spec.markRules`
 

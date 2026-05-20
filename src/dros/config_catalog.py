@@ -194,6 +194,15 @@ spec:
           - udp/53
       forward:
         policy: accept
+  natRules:
+    - type: portmap
+      daddr: 10.20.255.8
+      proto: tcp
+      dport: 6443
+      to: 10.20.3.83
+      toPort: 6443
+      hairpin:
+        sourceNet: 10.20.0.0/16
 """,
     ),
     "IpListUpdater": ConfigObjectCatalogEntry(

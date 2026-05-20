@@ -318,6 +318,8 @@ def _render_nat(context: UpdateContext, config: FirewallConfig) -> str:
         elif kind == "ipmap":
             lines.append(f"add rule inet {NAT_TABLE} dnat_prerouting {match} dnat to {item['to']}")
             lines.append(f"add rule inet {FILTER_TABLE} portmap_forward {match} accept")
+            if item.get("hairpin"):
+                lines.append(_render_hairpin(item, family))
         elif kind == "snat":
             lines.append(f"add rule inet {NAT_TABLE} snat_postrouting {match} snat to {item['to']}")
         elif kind == "masquerade":
@@ -433,6 +435,11 @@ def _validate_nat_rules(
         kind = item.get("type")
         if kind not in {"portmap", "ipmap", "snat", "masquerade", "raw"}:
             errors.append(f"Firewall/{obj.name}: spec.natRules[{index}].type is invalid")
+        if item.get("hairpin") and kind not in {"portmap", "ipmap"}:
+            errors.append(
+                f"Firewall/{obj.name}: spec.natRules[{index}].hairpin "
+                "is only supported for portmap and ipmap"
+            )
         if item.get("rawRule"):
             _validate_raw_devgroups(
                 obj,
@@ -448,6 +455,10 @@ def _validate_nat_rules(
                     f"Firewall/{obj.name}: spec.natRules[{index}] "
                     "portmap requires proto, dport, and to"
                 )
+        if kind in {"ipmap", "snat"} and not item.get("to"):
+            errors.append(f"Firewall/{obj.name}: spec.natRules[{index}] {kind} requires to")
+        if item.get("hairpin") and kind in {"portmap", "ipmap"}:
+            _validate_hairpin(obj, f"spec.natRules[{index}].hairpin", item, errors)
         if item.get("iif"):
             _validate_subject(obj, f"spec.natRules[{index}].iif", str(item["iif"]), devgroups, errors)
         if item.get("oif"):
@@ -516,6 +527,32 @@ def _validate_raw_devgroups(
         name = match.removeprefix("devgroup/")
         if name not in devgroups and not name.isdigit():
             errors.append(f"Firewall/{obj.name}: {field} references undefined DevGroup/{name}")
+
+
+def _validate_hairpin(
+    obj: ConfigObject,
+    path: str,
+    item: dict[str, Any],
+    errors: list[str],
+) -> None:
+    hairpin = item.get("hairpin")
+    if not isinstance(hairpin, dict):
+        errors.append(f"Firewall/{obj.name}: {path} must be a mapping")
+        return
+    family = str(item.get("family", "ip"))
+    source_net = _mapping_value(hairpin, "sourceNet", "source_net")
+    snat = str(_mapping_value(hairpin, "snat", "snat", "preserve-low24"))
+    snat_to = _mapping_value(hairpin, "snatTo", "snat_to")
+    if not source_net:
+        errors.append(f"Firewall/{obj.name}: {path}.sourceNet is required")
+    if snat not in {"preserve-low24", "to-address"}:
+        errors.append(f"Firewall/{obj.name}: {path}.snat is invalid")
+    if family not in {"ip", "ip6"}:
+        errors.append(f"Firewall/{obj.name}: {path} only supports family ip or ip6")
+    if family != "ip" and snat == "preserve-low24":
+        errors.append(f"Firewall/{obj.name}: {path}.snat=preserve-low24 only supports family ip")
+    if snat == "to-address" and not snat_to:
+        errors.append(f"Firewall/{obj.name}: {path}.snatTo is required for to-address hairpin SNAT")
 
 
 def _validate_fwmark_obj(context: UpdateContext, obj: ConfigObject, errors: list[str]) -> None:
@@ -593,18 +630,33 @@ def _nat_match(context: UpdateContext, item: dict[str, Any]) -> str:
 
 def _render_hairpin(item: dict[str, Any], family: str) -> str:
     hairpin = item["hairpin"]
-    proto = str(item["proto"])
-    to_port = item.get("toPort", item["dport"])
-    match = (
-        f"{family} saddr {hairpin['sourceNet']} {family} daddr {item['to']} "
-        f"{proto} dport {_port_set(to_port)}"
-    )
-    if hairpin.get("snat") == "to-address":
-        return f"add rule inet {NAT_TABLE} snat_postrouting {match} snat to {hairpin['snatTo']}"
+    source_net = _mapping_value(hairpin, "sourceNet", "source_net")
+    parts = [f"{family} saddr {source_net}", f"{family} daddr {item['to']}"]
+    if item.get("proto") and item.get("dport") is not None:
+        proto = str(item["proto"])
+        to_port = item.get("toPort", item["dport"])
+        parts.append(f"{proto} dport {_port_set(to_port)}")
+    match = " ".join(parts)
+    if _mapping_value(hairpin, "snat", "snat", "preserve-low24") == "to-address":
+        snat_to = _mapping_value(hairpin, "snatTo", "snat_to")
+        return f"add rule inet {NAT_TABLE} snat_postrouting {match} snat to {snat_to}"
     return (
         f"add rule inet {NAT_TABLE} snat_postrouting {match} "
         f"snat to {family} saddr & 0.255.255.255 | 255.0.0.0"
     )
+
+
+def _mapping_value(
+    mapping: dict[str, Any],
+    camel: str,
+    snake: str,
+    default: Any = None,
+) -> Any:
+    if camel in mapping:
+        return mapping[camel]
+    if snake in mapping:
+        return mapping[snake]
+    return default
 
 
 def _nat_chain(kind: str) -> str:

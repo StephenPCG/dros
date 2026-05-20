@@ -529,6 +529,78 @@ spec:
     assert ["nft", "-f", "/etc/nftables.conf"] in _commands(result)
 
 
+def test_update_firewall_renders_portmap_and_ipmap_hairpin_nat(tmp_path: Path) -> None:
+    settings = _settings(tmp_path)
+    settings.paths.configs.mkdir(parents=True)
+    (settings.paths.configs / "firewall.yaml").write_text(
+        """
+kind: Firewall
+metadata:
+  name: main
+spec:
+  natRules:
+    - type: portmap
+      daddr: 10.20.255.8
+      proto: tcp
+      dport: 6443
+      to: 10.20.3.83
+      toPort: 6443
+      hairpin:
+        sourceNet: 10.20.0.0/16
+    - type: ipmap
+      daddr: 10.30.255.8
+      to: 10.30.3.83
+      hairpin:
+        sourceNet: 10.30.0.0/16
+""".lstrip(),
+        encoding="utf-8",
+    )
+
+    run_update(settings, target="firewall/main", console=_console(StringIO()))
+
+    nft = (settings.sys_root / "etc/dros/nftables.d/10-firewall.nft").read_text(
+        encoding="utf-8"
+    )
+    assert (
+        "add rule inet dros_nat snat_postrouting "
+        "ip saddr 10.20.0.0/16 ip daddr 10.20.3.83 tcp dport 6443 "
+        "snat to ip saddr & 0.255.255.255 | 255.0.0.0"
+    ) in nft
+    assert (
+        "add rule inet dros_nat snat_postrouting "
+        "ip saddr 10.30.0.0/16 ip daddr 10.30.3.83 "
+        "snat to ip saddr & 0.255.255.255 | 255.0.0.0"
+    ) in nft
+
+
+def test_update_firewall_validates_hairpin_nat(tmp_path: Path) -> None:
+    settings = _settings(tmp_path)
+    settings.paths.configs.mkdir(parents=True)
+    (settings.paths.configs / "firewall.yaml").write_text(
+        """
+kind: Firewall
+metadata:
+  name: main
+spec:
+  natRules:
+    - type: portmap
+      proto: tcp
+      dport: 443
+      to: 10.0.0.2
+      hairpin:
+        snat: to-address
+""".lstrip(),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(UpdateValidationError) as exc_info:
+        run_update(settings, target="firewall/main", console=_console(StringIO()))
+
+    message = "\n".join(exc_info.value.errors)
+    assert "spec.natRules[0].hairpin.sourceNet is required" in message
+    assert "spec.natRules[0].hairpin.snatTo is required for to-address hairpin SNAT" in message
+
+
 def test_update_firewall_mark_rules_match_icmp(tmp_path: Path) -> None:
     settings = _settings(tmp_path)
     settings.paths.configs.mkdir(parents=True)
