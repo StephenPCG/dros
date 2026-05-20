@@ -336,7 +336,7 @@ def create_app(settings: DrosSettings | None = None) -> FastAPI:
             path = download_profile_file(settings, instance=instance, kind=kind, name=name, file_name=file)
         except ValueError as exc:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
-        return FileResponse(path, filename=path.name)
+        return FileResponse(path, filename=_openvpn_download_name(kind, name, path.name))
 
     if settings and settings.web.static_dir and settings.web.static_dir.exists():
         api.mount("/", SPAStaticFiles(directory=settings.web.static_dir, html=True), name="web")
@@ -362,6 +362,17 @@ def create_app(settings: DrosSettings | None = None) -> FastAPI:
 """
 
     return api
+
+
+def _openvpn_download_name(kind: str, profile_name: str, stored_name: str) -> str:
+    if kind == "server":
+        return f"server-{profile_name}.ovpn"
+    if kind == "client":
+        suffix = Path(stored_name).stem
+        if suffix.startswith("client-"):
+            suffix = suffix.removeprefix("client-")
+        return f"client-{profile_name}-{suffix}.ovpn"
+    return stored_name
 
 
 app = create_app()

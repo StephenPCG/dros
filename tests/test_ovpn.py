@@ -205,7 +205,17 @@ def test_ovpn_web_api_creates_renews_revokes_and_downloads_profile(
     assert certs.status_code == 200
     assert certs.json()["certs"][0]["latest"] is True
     assert download.status_code == 200
+    assert (
+        download.headers["content-disposition"]
+        == 'attachment; filename="client-alice-auto.ovpn"'
+    )
     assert "client" in download.text
     assert "remote beijing.vpn.example.net 1194 udp" in download.text
+    server_download = client.get("/api/openvpn/instances/office/profiles/server/beijing/download")
+    assert server_download.status_code == 200
+    assert (
+        server_download.headers["content-disposition"]
+        == 'attachment; filename="server-beijing.ovpn"'
+    )
     assert revoke.status_code == 200
     assert revoke.json()["ok"] is True

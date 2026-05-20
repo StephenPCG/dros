@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import math
+import re
 import subprocess
+import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -13,6 +15,8 @@ from dros.config_objects import CollectdConfig, ConfigObject, load_config_object
 from dros.settings import DrosSettings
 
 TIMESPANS: dict[str, tuple[str, int]] = {
+    "10min": ("10min", 10 * 60),
+    "30min": ("30min", 30 * 60),
     "1h": ("1h", 60 * 60),
     "4h": ("4h", 4 * 60 * 60),
     "12h": ("12h", 12 * 60 * 60),
@@ -95,8 +99,10 @@ def collect_bandwidth_series(
     target: str,
     timespan: str,
     runner: RrdRunner | None = None,
+    now: int | None = None,
 ) -> dict[str, Any]:
     seconds = _timespan_seconds(timespan)
+    start, end = _series_window(seconds, now)
     files = _rrd_files(settings)
     rrd_path = files.bandwidth.get(target)
     if rrd_path is None:
@@ -104,6 +110,8 @@ def collect_bandwidth_series(
             "target": target,
             "timespan": timespan,
             "unit": "bit/s",
+            "startTimestamp": start,
+            "endTimestamp": end,
             "points": [],
         }
     rows = _fetch_rrd(rrd_path, seconds, runner)
@@ -122,6 +130,8 @@ def collect_bandwidth_series(
         "target": target,
         "timespan": timespan,
         "unit": "bit/s",
+        "startTimestamp": start,
+        "endTimestamp": end,
         "points": points,
     }
 
@@ -132,8 +142,10 @@ def collect_ping_series(
     target: str,
     timespan: str,
     runner: RrdRunner | None = None,
+    now: int | None = None,
 ) -> dict[str, Any]:
     seconds = _timespan_seconds(timespan)
+    start, end = _series_window(seconds, now)
     files = _rrd_files(settings)
     latency = _single_value_rows(files.ping_latency.get(target), seconds, runner)
     loss = _single_value_rows(files.ping_loss.get(target), seconds, runner)
@@ -153,6 +165,8 @@ def collect_ping_series(
         "timespan": timespan,
         "latencyUnit": "ms",
         "lossUnit": "%",
+        "startTimestamp": start,
+        "endTimestamp": end,
         "points": points,
     }
 
@@ -164,10 +178,12 @@ def collect_metric_series(
     target: str,
     timespan: str,
     runner: RrdRunner | None = None,
+    now: int | None = None,
 ) -> dict[str, Any]:
     if kind not in METRIC_KINDS:
         raise ValueError(f"unsupported metric kind: {kind}")
     seconds = _timespan_seconds(timespan)
+    start, end = _series_window(seconds, now)
     files = _rrd_files(settings)
     series_sources = files.metrics.get(kind, {}).get(target, {})
     labels = sorted(series_sources, key=_metric_label_sort_key)
@@ -182,6 +198,8 @@ def collect_metric_series(
         "timespan": timespan,
         "unit": _metric_unit(kind, series_sources),
         "labels": labels,
+        "startTimestamp": start,
+        "endTimestamp": end,
         "points": [
             {
                 "timestamp": timestamp,
@@ -358,10 +376,27 @@ def _target_path(settings: DrosSettings, path: Path) -> Path:
 
 
 def _timespan_seconds(timespan: str) -> int:
-    try:
+    if timespan in TIMESPANS:
         return TIMESPANS[timespan][1]
-    except KeyError as exc:
-        raise ValueError(f"unsupported timespan: {timespan}") from exc
+    match = re.fullmatch(r"([1-9][0-9]*)(min|h|d|w|m|y)", timespan.strip())
+    if match is None:
+        raise ValueError(f"unsupported timespan: {timespan}")
+    amount = int(match.group(1))
+    unit = match.group(2)
+    multipliers = {
+        "min": 60,
+        "h": 60 * 60,
+        "d": 24 * 60 * 60,
+        "w": 7 * 24 * 60 * 60,
+        "m": 30 * 24 * 60 * 60,
+        "y": 365 * 24 * 60 * 60,
+    }
+    return amount * multipliers[unit]
+
+
+def _series_window(seconds: int, now: int | None) -> tuple[int, int]:
+    end = int(time.time()) if now is None else now
+    return end - seconds, end
 
 
 def _fetch_rrd(

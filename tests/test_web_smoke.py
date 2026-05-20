@@ -59,10 +59,34 @@ def test_web_frontend_dashboard_uses_server_storage_and_fixed_datetime_format() 
 
     assert '"/api/monitor/dashboards"' in source
     assert "window.localStorage.setItem(DASHBOARD_STORAGE_KEY" not in source
-    assert "布局和时间段保存在服务端" in source
+    assert "布局和时间段保存在服务端" not in source
+    assert "上次刷新" in source
     assert "function formatDateTime" in source
     assert ".toLocaleString(" not in source
     assert ".toLocaleDateString(" not in source
+
+
+def test_web_frontend_dashboard_supports_custom_timespans_and_fixed_x_axis() -> None:
+    source = (Path(__file__).resolve().parents[1] / "web/src/App.tsx").read_text(encoding="utf-8")
+
+    assert '{ id: "10min", label: "10min", seconds: 10 * 60 }' in source
+    assert '{ id: "30min", label: "30min", seconds: 30 * 60 }' in source
+    assert "function TimespanSelector" in source
+    assert "parseTimespanSeconds" in source
+    assert "xAxisRangeFromSeries" in source
+    assert "min: xAxisRange.min" in source
+    assert "max: xAxisRange.max" in source
+
+
+def test_web_frontend_shell_supports_local_wide_normal_mode() -> None:
+    source = (Path(__file__).resolve().parents[1] / "web/src/App.tsx").read_text(encoding="utf-8")
+
+    assert 'type ContentMode = "wide" | "normal"' in source
+    assert "function ContentModeButton" in source
+    assert "function useContentMode" in source
+    assert 'window.localStorage.setItem("dros-content-mode", mode)' in source
+    assert 'return "wide"' in source
+    assert "contentMode === \"wide\" ? \"max-w-none\" : \"max-w-6xl\"" in source
 
 
 def test_web_frontend_dashboard_supports_metric_charts_and_vertical_shared_crosshair() -> None:
@@ -408,6 +432,8 @@ spec:
     assert response.status_code == 200
     payload = response.json()
     assert payload["timespans"] == [
+        {"id": "10min", "label": "10min", "seconds": 600},
+        {"id": "30min", "label": "30min", "seconds": 1800},
         {"id": "1h", "label": "1h", "seconds": 3600},
         {"id": "4h", "label": "4h", "seconds": 14400},
         {"id": "12h", "label": "12h", "seconds": 43200},
@@ -454,7 +480,13 @@ def test_collect_bandwidth_series_fetches_rrd_points(tmp_path: Path) -> None:
 1700000010: nan 5.0000000000e+02
 """
 
-    payload = collect_bandwidth_series(settings, target="eth0", timespan="1h", runner=runner)
+    payload = collect_bandwidth_series(
+        settings,
+        target="eth0",
+        timespan="1h",
+        runner=runner,
+        now=1700000010,
+    )
 
     assert commands == [
         [
@@ -474,6 +506,37 @@ def test_collect_bandwidth_series_fetches_rrd_points(tmp_path: Path) -> None:
         {"timestamp": 1700000000, "rxBitsPerSecond": 1000.0, "txBitsPerSecond": 2000.0},
         {"timestamp": 1700000010, "rxBitsPerSecond": None, "txBitsPerSecond": 4000.0},
     ]
+    assert payload["startTimestamp"] == 1700000010 - 3600
+    assert payload["endTimestamp"] == 1700000010
+
+
+def test_collect_bandwidth_series_accepts_custom_timespan(tmp_path: Path) -> None:
+    sysroot = tmp_path / "sysroot"
+    rrd = sysroot / "var/lib/collectd/rrd/gateway/interface-eth0/if_octets.rrd"
+    rrd.parent.mkdir(parents=True)
+    rrd.touch()
+    settings = DrosSettings(sysRoot=sysroot, paths=DrosPaths(configs=tmp_path / "configs"))
+    commands: list[list[str]] = []
+
+    def runner(command: list[str]) -> str:
+        commands.append(command)
+        return """
+                              rx                 tx
+1700000000: 1.2500000000e+02 2.5000000000e+02
+"""
+
+    payload = collect_bandwidth_series(
+        settings,
+        target="eth0",
+        timespan="10min",
+        runner=runner,
+        now=1700000000,
+    )
+
+    assert commands[0][4:8] == ["--start", "now-600", "--end", "now"]
+    assert payload["timespan"] == "10min"
+    assert payload["startTimestamp"] == 1700000000 - 600
+    assert payload["endTimestamp"] == 1700000000
 
 
 def test_collect_ping_series_fetches_latency_and_loss_points(tmp_path: Path) -> None:
@@ -532,13 +595,29 @@ def test_collect_metric_series_fetches_load_and_aggregates_cpu_points(tmp_path: 
 1700000000: 3.000000e+01
 """
 
-    load_payload = collect_metric_series(settings, kind="load", target="system", timespan="1h", runner=runner)
-    cpu_payload = collect_metric_series(settings, kind="cpu", target="all", timespan="1h", runner=runner)
+    load_payload = collect_metric_series(
+        settings,
+        kind="load",
+        target="system",
+        timespan="1h",
+        runner=runner,
+        now=1700000010,
+    )
+    cpu_payload = collect_metric_series(
+        settings,
+        kind="cpu",
+        target="all",
+        timespan="1h",
+        runner=runner,
+        now=1700000010,
+    )
 
     assert load_payload == {
         "kind": "load",
         "target": "system",
         "timespan": "1h",
+        "startTimestamp": 1699996410,
+        "endTimestamp": 1700000010,
         "unit": "",
         "labels": ["1m", "5m", "15m"],
         "points": [{"timestamp": 1700000000, "values": {"1m": 0.1, "5m": 0.2, "15m": 0.3}}],
@@ -547,6 +626,8 @@ def test_collect_metric_series_fetches_load_and_aggregates_cpu_points(tmp_path: 
         "kind": "cpu",
         "target": "all",
         "timespan": "1h",
+        "startTimestamp": 1699996410,
+        "endTimestamp": 1700000010,
         "unit": "%",
         "labels": ["user"],
         "points": [{"timestamp": 1700000000, "values": {"user": 20.0}}],

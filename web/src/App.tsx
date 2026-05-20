@@ -18,7 +18,9 @@ import {
   LayoutDashboard,
   Loader2,
   LogOut,
+  Maximize2,
   Menu,
+  Minimize2,
   Moon,
   MoreVertical,
   Plus,
@@ -52,6 +54,7 @@ type MonitorViewId = "overview" | "bandwidth" | "ping"
 type MonitorTabKind = "overview" | "devices" | "openvpnClients" | "dashboard"
 type LogsViewId = "invocations" | "errors"
 type Theme = "light" | "dark"
+type ContentMode = "wide" | "normal"
 type OpenVPNProfileKind = "server" | "client"
 type MetricChartType = "cpu" | "memory" | "load" | "disk" | "df" | "conntrack" | "contextswitch" | "irq"
 type DashboardChartType = "bandwidth" | "ping" | MetricChartType
@@ -170,6 +173,8 @@ type BandwidthSeries = {
   target: string
   timespan: string
   unit: string
+  startTimestamp?: number
+  endTimestamp?: number
   points: BandwidthPoint[]
 }
 
@@ -184,6 +189,8 @@ type PingSeries = {
   timespan: string
   latencyUnit: string
   lossUnit: string
+  startTimestamp?: number
+  endTimestamp?: number
   points: PingPoint[]
 }
 
@@ -198,6 +205,8 @@ type MetricSeries = {
   timespan: string
   unit: string
   labels: string[]
+  startTimestamp?: number
+  endTimestamp?: number
   points: MetricPoint[]
 }
 
@@ -319,6 +328,8 @@ const METRIC_COLOR_CLASSES = [
   "bg-indigo-600",
 ]
 const DEFAULT_TIMESPANS: MonitorTimespan[] = [
+  { id: "10min", label: "10min", seconds: 10 * 60 },
+  { id: "30min", label: "30min", seconds: 30 * 60 },
   { id: "1h", label: "1h", seconds: 60 * 60 },
   { id: "4h", label: "4h", seconds: 4 * 60 * 60 },
   { id: "12h", label: "12h", seconds: 12 * 60 * 60 },
@@ -332,6 +343,7 @@ function App() {
   const [activePage, setActivePage] = useState<PageId>(() => pageFromPath(window.location.pathname))
   const [navOpen, setNavOpen] = useState(false)
   const [theme, setTheme] = useTheme()
+  const [contentMode, setContentMode] = useContentMode()
 
   useEffect(() => {
     function handlePopState() {
@@ -415,7 +427,12 @@ function App() {
   return (
     <main className="min-h-svh bg-background text-foreground">
       <header className="sticky top-0 z-10 border-b bg-background/95 backdrop-blur">
-        <div className="mx-auto flex w-full max-w-6xl items-center justify-between gap-3 px-4 py-3 md:px-6">
+        <div
+          className={cn(
+            "mx-auto flex w-full items-center justify-between gap-3 px-4 py-3 md:px-6",
+            contentMode === "wide" ? "max-w-none" : "max-w-6xl",
+          )}
+        >
           <div className="flex min-w-0 items-center gap-2 md:gap-3">
             <div className="flex min-w-0 items-center gap-3">
               <div className="grid size-9 place-items-center rounded-md bg-foreground text-background">
@@ -465,6 +482,7 @@ function App() {
           </nav>
 
           <div className="flex items-center gap-1 md:gap-2">
+            <ContentModeButton mode={contentMode} onToggle={() => setContentMode(toggleContentMode(contentMode))} />
             <ThemeButton theme={theme} onToggle={() => setTheme(toggleTheme(theme))} />
             <Button className="md:hidden" variant="ghost" size="icon" onClick={handleLogout} aria-label="退出登录">
               <LogOut className="size-4" />
@@ -479,7 +497,12 @@ function App() {
 
       {navOpen ? <MobileNavigationDrawer activePage={activePage} onSelect={handlePageChange} onClose={() => setNavOpen(false)} /> : null}
 
-      <section className="mx-auto flex w-full max-w-6xl flex-1 flex-col px-4 py-5 md:px-6 md:py-7">
+      <section
+        className={cn(
+          "mx-auto flex w-full flex-1 flex-col px-4 py-5 md:px-6 md:py-7",
+          contentMode === "wide" ? "max-w-none" : "max-w-6xl",
+        )}
+      >
         <div className="mb-4 flex items-center gap-3">
           <ActiveIcon className="size-5 text-muted-foreground" />
           <h1 className="text-xl font-semibold tracking-normal md:text-2xl">{active.label}</h1>
@@ -691,6 +714,7 @@ function MonitorPage() {
   const [dashboardsLoaded, setDashboardsLoaded] = useState(false)
   const [loadingTargets, setLoadingTargets] = useState(true)
   const [loadingSeries, setLoadingSeries] = useState(false)
+  const [lastDashboardRefreshAt, setLastDashboardRefreshAt] = useState<number | null>(null)
   const [error, setError] = useState("")
   const [addChartOpen, setAddChartOpen] = useState(false)
   const [moreOpen, setMoreOpen] = useState(false)
@@ -832,6 +856,7 @@ function MonitorPage() {
     async function loadDashboardSeries() {
       if (activeDashboard.charts.length === 0) {
         setSeries({})
+        setLastDashboardRefreshAt(Date.now())
         return
       }
       setLoadingSeries(true)
@@ -850,6 +875,7 @@ function MonitorPage() {
         )
         if (!cancelled) {
           setSeries(Object.fromEntries(values))
+          setLastDashboardRefreshAt(Date.now())
         }
       } catch (err) {
         if (!cancelled) {
@@ -1089,17 +1115,14 @@ function MonitorPage() {
                 {loadingSeries ? <Loader2 className="size-4 animate-spin text-muted-foreground" /> : null}
               </div>
               <div className="mt-1 text-xs text-muted-foreground">
-                自动刷新 10s · 布局和时间段保存在服务端
+                自动刷新 10s · 上次刷新 {lastDashboardRefreshAt ? formatDateTime(lastDashboardRefreshAt) : "-"}
               </div>
             </div>
             <div className="flex flex-wrap items-center gap-2">
-              <DropdownSelect
-                ariaLabel="Dashboard 时间段"
-                className="w-24"
+              <TimespanSelector
                 value={activeDashboard.timespan}
-                options={timespans.map((timespan) => ({ value: timespan.id, label: timespan.label }))}
+                timespans={timespans}
                 onChange={(timespan) => updateActiveDashboard((dashboard) => ({ ...dashboard, timespan }))}
-                menuAlign="right"
               />
               <Button variant="outline" onClick={() => setAddChartOpen(true)} disabled={loadingTargets}>
                 <BarChart3 className="size-4" />
@@ -1561,10 +1584,12 @@ function metricChartOption(series?: MetricSeries): EChartsOption {
   const labels = metricChartPlotLabels(series)
   const unit = series?.unit ?? ""
   const stacked = isStackedMetricAreaChart(series)
+  const xAxisRange = xAxisRangeFromSeries(series)
   return baseChartOption({
     emptyText: "暂无指标数据",
     legend: labels,
     colors: labels.map((_, index) => METRIC_COLORS[index % METRIC_COLORS.length]),
+    xAxisRange,
     yAxis: [
       {
         type: "value",
@@ -1607,11 +1632,39 @@ function isHiddenMetricPlotLabel(series: MetricSeries | undefined, label: string
   return isStackedMetricAreaChart(series) && label === "free"
 }
 
+function xAxisRangeFromSeries(
+  series?: DashboardChartSeries,
+): { min: number | undefined; max: number | undefined } {
+  if (
+    series?.startTimestamp != null &&
+    series.endTimestamp != null &&
+    Number.isFinite(series.startTimestamp) &&
+    Number.isFinite(series.endTimestamp)
+  ) {
+    return {
+      min: series.startTimestamp * 1000,
+      max: series.endTimestamp * 1000,
+    }
+  }
+  const seconds = series?.timespan ? parseTimespanSeconds(series.timespan) : null
+  if (seconds == null) {
+    return { min: undefined, max: undefined }
+  }
+  const maxPointTimestamp = Math.max(0, ...(series?.points ?? []).map((point) => point.timestamp))
+  const end = maxPointTimestamp > 0 ? maxPointTimestamp : Math.floor(Date.now() / 1000)
+  return {
+    min: (end - seconds) * 1000,
+    max: end * 1000,
+  }
+}
+
 function bandwidthChartOption(series?: BandwidthSeries): EChartsOption {
   const points = series?.points ?? []
+  const xAxisRange = xAxisRangeFromSeries(series)
   return baseChartOption({
     emptyText: "暂无带宽数据",
     legend: ["Incoming", "Outgoing"],
+    xAxisRange,
     yAxis: [
       {
         type: "value",
@@ -1649,9 +1702,11 @@ function bandwidthChartOption(series?: BandwidthSeries): EChartsOption {
 
 function pingChartOption(series?: PingSeries): EChartsOption {
   const points = series?.points ?? []
+  const xAxisRange = xAxisRangeFromSeries(series)
   return baseChartOption({
     emptyText: "暂无 Ping 数据",
     legend: ["延迟", "丢包"],
+    xAxisRange,
     yAxis: [
       {
         type: "value",
@@ -1698,12 +1753,14 @@ function baseChartOption({
   emptyText,
   legend,
   colors,
+  xAxisRange = { min: undefined, max: undefined },
   yAxis,
   series,
 }: {
   emptyText: string
   legend: string[]
   colors?: string[]
+  xAxisRange?: { min: number | undefined; max: number | undefined }
   yAxis: EChartsOption["yAxis"]
   series: EChartsOption["series"]
 }): EChartsOption {
@@ -1733,6 +1790,8 @@ function baseChartOption({
     },
     xAxis: {
       type: "time",
+      min: xAxisRange.min,
+      max: xAxisRange.max,
       axisLabel: {
         color: "#64748b",
         hideOverlap: true,
@@ -3371,6 +3430,58 @@ function TooltipIconButton({
   )
 }
 
+function TimespanSelector({
+  value,
+  timespans,
+  onChange,
+}: {
+  value: string
+  timespans: MonitorTimespan[]
+  onChange: (value: string) => void
+}) {
+  const [customValue, setCustomValue] = useState("")
+  const options = timespanOptions(timespans, value)
+  const customValid = parseTimespanSeconds(customValue) !== null
+
+  function applyCustomTimespan() {
+    const normalized = customValue.trim()
+    if (!parseTimespanSeconds(normalized)) {
+      return
+    }
+    onChange(normalized)
+    setCustomValue("")
+  }
+
+  return (
+    <div className="flex flex-wrap items-center gap-2">
+      <DropdownSelect
+        ariaLabel="Dashboard 时间段"
+        className="w-28"
+        value={value}
+        options={options}
+        onChange={onChange}
+        menuAlign="right"
+      />
+      <input
+        className="h-9 w-24 rounded-md border bg-background px-2 text-sm outline-none transition-colors focus:border-ring focus:ring-2 focus:ring-ring/20"
+        value={customValue}
+        onChange={(event) => setCustomValue(event.target.value)}
+        onKeyDown={(event) => {
+          if (event.key === "Enter") {
+            event.preventDefault()
+            applyCustomTimespan()
+          }
+        }}
+        placeholder="自定义"
+        aria-label="自定义时间段"
+      />
+      <Button variant="outline" onClick={applyCustomTimespan} disabled={!customValid}>
+        应用
+      </Button>
+    </div>
+  )
+}
+
 function DropdownSelect({
   ariaLabel,
   value,
@@ -3589,6 +3700,14 @@ function dashboardTargetLabel(type: DashboardChartType): string {
 
 function defaultDashboardChartTitle(chart: Pick<DashboardChart, "type" | "target">): string {
   return `${DASHBOARD_CHART_TYPE_LABELS[chart.type]} · ${chart.target || dashboardTargetLabel(chart.type)}`
+}
+
+function timespanOptions(timespans: MonitorTimespan[], value: string): DropdownOption[] {
+  const options = timespans.map((timespan) => ({ value: timespan.id, label: timespan.label }))
+  if (value && !options.some((option) => option.value === value) && parseTimespanSeconds(value) !== null) {
+    return [{ value, label: value }, ...options]
+  }
+  return options
 }
 
 function dashboardChartTitleValue(chart: DashboardChart): string {
@@ -3985,6 +4104,23 @@ function formatMetricValue(value: number, unit: string): string {
   return unit ? `${formatNumber(value)} ${unit}` : formatNumber(value)
 }
 
+function parseTimespanSeconds(value: string): number | null {
+  const match = value.trim().match(/^([1-9]\d*)(min|h|d|w|m|y)$/)
+  if (!match) {
+    return null
+  }
+  const amount = Number(match[1])
+  const multipliers: Record<string, number> = {
+    min: 60,
+    h: 60 * 60,
+    d: 24 * 60 * 60,
+    w: 7 * 24 * 60 * 60,
+    m: 30 * 24 * 60 * 60,
+    y: 365 * 24 * 60 * 60,
+  }
+  return amount * multipliers[match[2]]
+}
+
 function formatNumber(value: number): string {
   const abs = Math.abs(value)
   if (abs >= 1000) {
@@ -4166,6 +4302,21 @@ function ThemeButton({ theme, onToggle }: { theme: Theme; onToggle: () => void }
   )
 }
 
+function ContentModeButton({ mode, onToggle }: { mode: ContentMode; onToggle: () => void }) {
+  return (
+    <Button
+      className="hidden md:inline-flex"
+      variant="ghost"
+      size="icon"
+      onClick={onToggle}
+      aria-label={mode === "wide" ? "切换为 Normal 宽度" : "切换为 Wide 宽度"}
+      title={mode === "wide" ? "Wide" : "Normal"}
+    >
+      {mode === "wide" ? <Minimize2 className="size-4" /> : <Maximize2 className="size-4" />}
+    </Button>
+  )
+}
+
 function useTheme(): [Theme, (theme: Theme) => void] {
   const initialTheme = useMemo<Theme>(() => {
     const saved = window.localStorage.getItem("dros-theme")
@@ -4186,6 +4337,27 @@ function useTheme(): [Theme, (theme: Theme) => void] {
 
 function toggleTheme(theme: Theme): Theme {
   return theme === "dark" ? "light" : "dark"
+}
+
+function useContentMode(): [ContentMode, (mode: ContentMode) => void] {
+  const initialMode = useMemo<ContentMode>(() => {
+    const saved = window.localStorage.getItem("dros-content-mode")
+    if (saved === "wide" || saved === "normal") {
+      return saved
+    }
+    return "wide"
+  }, [])
+  const [mode, setModeState] = useState<ContentMode>(initialMode)
+
+  useEffect(() => {
+    window.localStorage.setItem("dros-content-mode", mode)
+  }, [mode])
+
+  return [mode, setModeState]
+}
+
+function toggleContentMode(mode: ContentMode): ContentMode {
+  return mode === "wide" ? "normal" : "wide"
 }
 
 function pageFromPath(pathname: string): PageId {
