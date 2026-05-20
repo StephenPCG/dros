@@ -94,6 +94,18 @@ def test_web_frontend_dashboard_uses_custom_dropdowns_and_clickaway_menu() -> No
     assert 'document.addEventListener("pointerdown", handleDashboardMorePointerDown)' in source
 
 
+def test_web_frontend_dashboard_chart_titles_are_customizable() -> None:
+    source = (Path(__file__).resolve().parents[1] / "web/src/App.tsx").read_text(encoding="utf-8")
+
+    assert "title?: string" in source
+    assert "function updateChartTitle" in source
+    assert "function normalizeChartTitle" in source
+    assert "function defaultDashboardChartTitle" in source
+    assert 'aria-label="图表标题"' in source
+    assert 'label htmlFor="dashboard-chart-title"' in source
+    assert "placeholder={defaultDashboardChartTitle(form)}" in source
+
+
 def test_web_monitor_summary_requires_auth_and_reports_system_counters(tmp_path: Path) -> None:
     sysroot = tmp_path / "sysroot"
     (sysroot / "proc").mkdir(parents=True)

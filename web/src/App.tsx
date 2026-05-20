@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react"
-import type { FormEvent, ReactNode } from "react"
+import type { FormEvent, PointerEvent as ReactPointerEvent, ReactNode } from "react"
 import ReactEChartsCore from "echarts-for-react/lib/core"
 import type { EChartsOption } from "echarts"
 import * as echarts from "echarts/core"
@@ -205,6 +205,7 @@ type DashboardChart = {
   id: string
   type: DashboardChartType
   target: string
+  title?: string
 }
 
 type MonitorDashboard = {
@@ -226,6 +227,7 @@ type DashboardChartSeries = BandwidthSeries | PingSeries | MetricSeries
 type AddChartForm = {
   type: DashboardChartType
   target: string
+  title: string
 }
 
 type DropdownOption = {
@@ -955,10 +957,12 @@ function MonitorPage() {
     if (!activeDashboard || !form.target) {
       return
     }
+    const title = normalizeChartTitle(form.title)
     const chart: DashboardChart = {
       id: createId("chart"),
       type: form.type,
       target: form.target,
+      title,
     }
     updateActiveDashboard((dashboard) => ({
       ...dashboard,
@@ -966,6 +970,13 @@ function MonitorPage() {
       layouts: addChartToLayouts(dashboard.layouts, dashboard.charts.length, chart.id),
     }))
     setAddChartOpen(false)
+  }
+
+  function updateChartTitle(chartId: string, title: string | undefined) {
+    updateActiveDashboard((dashboard) => ({
+      ...dashboard,
+      charts: dashboard.charts.map((chart) => (chart.id === chartId ? { ...chart, title } : chart)),
+    }))
   }
 
   function removeChart(chartId: string) {
@@ -1142,6 +1153,7 @@ function MonitorPage() {
               dashboard={activeDashboard}
               series={series}
               onLayoutChange={handleLayoutChange}
+              onUpdateChartTitle={updateChartTitle}
               onRemoveChart={removeChart}
             />
           )}
@@ -1196,6 +1208,7 @@ function AddDashboardChartModal({
   const [form, setForm] = useState<AddChartForm>({
     type: initialType,
     target: dashboardTargetsForType(targets, initialType)[0] ?? "",
+    title: "",
   })
   const options = dashboardTargetsForType(targets, form.type)
 
@@ -1211,7 +1224,7 @@ function AddDashboardChartModal({
 
   function setType(type: DashboardChartType) {
     const nextTargets = dashboardTargetsForType(targets, type)
-    setForm({ type, target: nextTargets[0] ?? "" })
+    setForm((current) => ({ ...current, type, target: nextTargets[0] ?? "" }))
   }
 
   function handleSubmit(event: FormEvent<HTMLFormElement>) {
@@ -1251,6 +1264,18 @@ function AddDashboardChartModal({
             placeholder="暂无可选项"
           />
         </div>
+        <div className="space-y-2">
+          <label htmlFor="dashboard-chart-title" className="text-sm font-medium">
+            标题
+          </label>
+          <input
+            id="dashboard-chart-title"
+            className="h-10 w-full rounded-md border bg-background px-3 text-sm outline-none transition-colors focus:border-ring focus:ring-2 focus:ring-ring/20"
+            value={form.title}
+            onChange={(event) => setForm((current) => ({ ...current, title: event.target.value }))}
+            placeholder={defaultDashboardChartTitle(form)}
+          />
+        </div>
         <div className="flex justify-end gap-2">
           <Button variant="outline" type="button" onClick={onClose}>
             取消
@@ -1268,11 +1293,13 @@ function DashboardGrid({
   dashboard,
   series,
   onLayoutChange,
+  onUpdateChartTitle,
   onRemoveChart,
 }: {
   dashboard: MonitorDashboard
   series: Record<string, DashboardChartSeries>
   onLayoutChange: (_layout: Layout, allLayouts: Layouts) => void
+  onUpdateChartTitle: (chartId: string, title: string | undefined) => void
   onRemoveChart: (chartId: string) => void
 }) {
   const {
@@ -1311,6 +1338,7 @@ function DashboardGrid({
                 series={series[chart.id]}
                 timespan={dashboard.timespan}
                 groupId={`dashboard-${dashboard.id}`}
+                onTitleChange={(title) => onUpdateChartTitle(chart.id, title)}
                 onRemove={() => onRemoveChart(chart.id)}
               />
             </div>
@@ -1330,25 +1358,37 @@ function DashboardChartCard({
   series,
   timespan,
   groupId,
+  onTitleChange,
   onRemove,
 }: {
   chart: DashboardChart
   series?: DashboardChartSeries
   timespan: string
   groupId: string
+  onTitleChange: (title: string | undefined) => void
   onRemove: () => void
 }) {
-  const title = `${DASHBOARD_CHART_TYPE_LABELS[chart.type]} · ${chart.target}`
+  const title = dashboardChartTitleValue(chart)
   const bandwidthSeries = chart.type === "bandwidth" ? (series as BandwidthSeries | undefined) : undefined
   const pingSeries = chart.type === "ping" ? (series as PingSeries | undefined) : undefined
   const metricSeries = isMetricChartType(chart.type) ? (series as MetricSeries | undefined) : undefined
+  function stopTitlePointerEvent(event: ReactPointerEvent<HTMLInputElement>) {
+    event.stopPropagation()
+  }
   return (
     <div className="flex h-full min-h-0 flex-col overflow-hidden rounded-md border bg-background shadow-sm">
       <div className="dashboard-drag-handle flex cursor-move items-center justify-between gap-3 border-b px-3 py-2">
-        <div className="min-w-0">
+        <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2 text-sm font-semibold">
             <GripHorizontal className="size-4 shrink-0 text-muted-foreground" />
-            <span className="truncate">{title}</span>
+            <input
+              className="h-7 min-w-0 flex-1 cursor-text rounded-sm border border-transparent bg-transparent px-1 text-sm font-semibold outline-none transition-colors hover:border-border focus:border-ring focus:bg-background focus:ring-2 focus:ring-ring/20"
+              value={title}
+              onChange={(event) => onTitleChange(event.target.value)}
+              onBlur={() => onTitleChange(normalizeChartTitle(chart.title))}
+              onPointerDown={stopTitlePointerEvent}
+              aria-label="图表标题"
+            />
           </div>
           <div className="mt-0.5 text-xs text-muted-foreground">{timespan}</div>
         </div>
@@ -3547,6 +3587,22 @@ function dashboardTargetLabel(type: DashboardChartType): string {
   return "对象"
 }
 
+function defaultDashboardChartTitle(chart: Pick<DashboardChart, "type" | "target">): string {
+  return `${DASHBOARD_CHART_TYPE_LABELS[chart.type]} · ${chart.target || dashboardTargetLabel(chart.type)}`
+}
+
+function dashboardChartTitleValue(chart: DashboardChart): string {
+  return chart.title ?? defaultDashboardChartTitle(chart)
+}
+
+function normalizeChartTitle(value: unknown): string | undefined {
+  if (typeof value !== "string") {
+    return undefined
+  }
+  const title = value.trim()
+  return title || undefined
+}
+
 function dashboardChartSeriesPath(chart: DashboardChart, params: URLSearchParams): string {
   if (chart.type === "bandwidth") {
     return `/api/monitor/rrd/bandwidth?${params}`
@@ -3602,7 +3658,7 @@ function normalizeDashboard(value: unknown): MonitorDashboard | null {
     return null
   }
   const charts = Array.isArray(raw.charts)
-    ? raw.charts.filter(isDashboardChart)
+    ? raw.charts.map(normalizeDashboardChart).filter((chart): chart is DashboardChart => chart !== null)
     : []
   const layouts =
     raw.layouts && typeof raw.layouts === "object"
@@ -3618,17 +3674,25 @@ function normalizeDashboard(value: unknown): MonitorDashboard | null {
   }
 }
 
-function isDashboardChart(value: unknown): value is DashboardChart {
+function normalizeDashboardChart(value: unknown): DashboardChart | null {
   if (!value || typeof value !== "object") {
-    return false
+    return null
   }
   const raw = value as Partial<DashboardChart>
-  return (
-    typeof raw.id === "string" &&
-    typeof raw.type === "string" &&
-    isDashboardChartType(raw.type) &&
-    typeof raw.target === "string"
-  )
+  if (
+    typeof raw.id !== "string" ||
+    typeof raw.type !== "string" ||
+    !isDashboardChartType(raw.type) ||
+    typeof raw.target !== "string"
+  ) {
+    return null
+  }
+  return {
+    id: raw.id,
+    type: raw.type,
+    target: raw.target,
+    title: normalizeChartTitle(raw.title),
+  }
 }
 
 function isDashboardChartType(value: string): value is DashboardChartType {
