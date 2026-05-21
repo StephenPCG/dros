@@ -3,7 +3,13 @@ import type { FormEvent, PointerEvent as ReactPointerEvent, ReactNode } from "re
 import ReactEChartsCore from "echarts-for-react/lib/core"
 import type { EChartsOption } from "echarts"
 import * as echarts from "echarts/core"
-import { GridComponent, GraphicComponent, LegendComponent, TooltipComponent } from "echarts/components"
+import {
+  GridComponent,
+  GraphicComponent,
+  LegendComponent,
+  MarkLineComponent,
+  TooltipComponent,
+} from "echarts/components"
 import { LineChart } from "echarts/charts"
 import { CanvasRenderer } from "echarts/renderers"
 import {
@@ -285,7 +291,15 @@ const pagePaths: Record<PageId, string> = {
   openvpn: "/openvpn",
 }
 
-echarts.use([GridComponent, GraphicComponent, LegendComponent, TooltipComponent, LineChart, CanvasRenderer])
+echarts.use([
+  GridComponent,
+  GraphicComponent,
+  LegendComponent,
+  MarkLineComponent,
+  TooltipComponent,
+  LineChart,
+  CanvasRenderer,
+])
 const DASHBOARD_STORAGE_KEY = "dros-monitor-dashboards-v1"
 const ACTIVE_DASHBOARD_STORAGE_KEY = "dros-monitor-active-dashboard-v1"
 const DASHBOARD_REFRESH_MS = 10_000
@@ -1661,10 +1675,13 @@ function xAxisRangeFromSeries(
 function bandwidthChartOption(series?: BandwidthSeries): EChartsOption {
   const points = series?.points ?? []
   const xAxisRange = xAxisRangeFromSeries(series)
+  const incoming95 = percentile95(points.map((point) => point.rxBitsPerSecond))
+  const outgoing95 = percentile95(points.map((point) => point.txBitsPerSecond))
   return baseChartOption({
     emptyText: "暂无带宽数据",
     legend: ["Incoming", "Outgoing"],
     xAxisRange,
+    tooltipValueFormatter: formatBandwidthTooltipValue,
     yAxis: [
       {
         type: "value",
@@ -1684,6 +1701,7 @@ function bandwidthChartOption(series?: BandwidthSeries): EChartsOption {
         lineStyle: { width: 2, color: "#2563eb" },
         itemStyle: { color: "#2563eb" },
         areaStyle: { color: "rgba(37, 99, 235, 0.18)" },
+        markLine: bandwidthP95MarkLine("Incoming 95th", incoming95, "#2563eb"),
       },
       {
         name: "Outgoing",
@@ -1695,9 +1713,34 @@ function bandwidthChartOption(series?: BandwidthSeries): EChartsOption {
         lineStyle: { width: 2, color: "#16a34a" },
         itemStyle: { color: "#16a34a" },
         areaStyle: { color: "rgba(22, 163, 74, 0.16)" },
+        markLine: bandwidthP95MarkLine("Outgoing 95th", outgoing95, "#16a34a"),
       },
     ],
   })
+}
+
+function bandwidthP95MarkLine(label: string, value: number | null, color: string) {
+  if (value == null) {
+    return undefined
+  }
+  return {
+    animation: false,
+    symbol: "none" as const,
+    silent: true,
+    label: {
+      show: true,
+      formatter: `${label}: ${formatBitRate(value)}`,
+      color,
+      fontSize: 11,
+      backgroundColor: "rgba(255, 255, 255, 0.78)",
+      borderColor: "rgba(148, 163, 184, 0.45)",
+      borderWidth: 1,
+      borderRadius: 3,
+      padding: [2, 4],
+    },
+    lineStyle: { color, type: "dashed" as const, width: 1.5, opacity: 0.82 },
+    data: [{ name: label, yAxis: value }],
+  }
 }
 
 function pingChartOption(series?: PingSeries): EChartsOption {
@@ -1754,6 +1797,7 @@ function baseChartOption({
   legend,
   colors,
   xAxisRange = { min: undefined, max: undefined },
+  tooltipValueFormatter = formatTooltipValue,
   yAxis,
   series,
 }: {
@@ -1761,6 +1805,7 @@ function baseChartOption({
   legend: string[]
   colors?: string[]
   xAxisRange?: { min: number | undefined; max: number | undefined }
+  tooltipValueFormatter?: (value: unknown) => string
   yAxis: EChartsOption["yAxis"]
   series: EChartsOption["series"]
 }): EChartsOption {
@@ -1780,7 +1825,7 @@ function baseChartOption({
     tooltip: {
       trigger: "axis",
       confine: true,
-      formatter: (params: unknown) => chartTooltipFormatter(params),
+      formatter: (params: unknown) => chartTooltipFormatter(params, tooltipValueFormatter),
       axisPointer: {
         type: "line",
         axis: "x",
@@ -1819,7 +1864,7 @@ function baseChartOption({
   }
 }
 
-function chartTooltipFormatter(params: unknown): string {
+function chartTooltipFormatter(params: unknown, valueFormatter: (value: unknown) => string): string {
   const items = Array.isArray(params) ? params : [params]
   const header = tooltipTimestamp(items[0])
   const rows = items
@@ -1830,7 +1875,7 @@ function chartTooltipFormatter(params: unknown): string {
       const record = item as Record<string, unknown>
       const marker = typeof record.marker === "string" ? record.marker : ""
       const seriesName = typeof record.seriesName === "string" ? record.seriesName : "value"
-      return `${marker}${escapeHtml(seriesName)}: ${escapeHtml(formatTooltipValue(record.value))}`
+      return `${marker}${escapeHtml(seriesName)}: ${escapeHtml(valueFormatter(record.value))}`
     })
     .filter(Boolean)
   return [header ? escapeHtml(header) : "", ...rows].filter(Boolean).join("<br/>")
@@ -1849,7 +1894,7 @@ function tooltipTimestamp(item: unknown): string | null {
 }
 
 function formatTooltipValue(value: unknown): string {
-  const raw = Array.isArray(value) ? value[1] : value
+  const raw = tooltipNumericValue(value) ?? (Array.isArray(value) ? value[1] : value)
   if (typeof raw === "number") {
     return Number.isInteger(raw) ? raw.toString() : raw.toFixed(2)
   }
@@ -1857,6 +1902,19 @@ function formatTooltipValue(value: unknown): string {
     return "-"
   }
   return String(raw)
+}
+
+function formatBandwidthTooltipValue(value: unknown): string {
+  const raw = tooltipNumericValue(value)
+  return raw == null ? formatTooltipValue(value) : formatBitRate(raw)
+}
+
+function tooltipNumericValue(value: unknown): number | null {
+  const raw = Array.isArray(value) ? value[1] : value
+  if (typeof raw === "number" && Number.isFinite(raw)) {
+    return raw
+  }
+  return null
 }
 
 function escapeHtml(value: string): string {
@@ -4043,6 +4101,16 @@ function numericStats(values: Array<number | null | undefined>): NumericStats {
     max: Math.max(...finite),
     last: finite[finite.length - 1],
   }
+}
+
+function percentile95(values: Array<number | null | undefined>): number | null {
+  const finite = values
+    .filter((value): value is number => value != null && Number.isFinite(value))
+    .sort((left, right) => left - right)
+  if (finite.length === 0) {
+    return null
+  }
+  return finite[Math.min(finite.length - 1, Math.ceil(finite.length * 0.95) - 1)]
 }
 
 function totalBytesFromBitRate(

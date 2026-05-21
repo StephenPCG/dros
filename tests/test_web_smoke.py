@@ -107,6 +107,18 @@ def test_web_frontend_dashboard_supports_metric_charts_and_vertical_shared_cross
     assert "echarts.connect(groupId)" in source
 
 
+def test_web_frontend_bandwidth_chart_formats_tooltip_values_and_draws_p95_lines() -> None:
+    source = (Path(__file__).resolve().parents[1] / "web/src/App.tsx").read_text(encoding="utf-8")
+
+    assert "MarkLineComponent" in source
+    assert "tooltipValueFormatter: formatBandwidthTooltipValue" in source
+    assert "function formatBandwidthTooltipValue" in source
+    assert "function percentile95" in source
+    assert 'bandwidthP95MarkLine("Incoming 95th"' in source
+    assert 'bandwidthP95MarkLine("Outgoing 95th"' in source
+    assert "formatter: `${label}: ${formatBitRate(value)}`" in source
+
+
 def test_web_frontend_dashboard_uses_custom_dropdowns_and_clickaway_menu() -> None:
     source = (Path(__file__).resolve().parents[1] / "web/src/App.tsx").read_text(encoding="utf-8")
 
