@@ -19,6 +19,7 @@ FILTER_TABLE = "dros_filter"
 ROUTE_TABLE = "dros_route"
 NAT_TABLE = "dros_nat"
 IP_PROTOCOL_SERVICES = frozenset({"gre", "esp", "ah"})
+LOCAL_OUTPUT_NAT_TYPES = frozenset({"portmap", "ipmap", "raw"})
 
 
 def create_plugin() -> DrosPlugin:
@@ -293,6 +294,8 @@ def _render_nat(context: UpdateContext, config: FirewallConfig) -> str:
             chain = _nat_chain(str(item["type"]))
             raw_rule = _resolve_raw_devgroups(context, str(item["rawRule"]))
             lines.append(f"add rule inet {NAT_TABLE} {chain} {raw_rule}")
+            if _local_output_enabled(item):
+                lines.append(f"add rule inet {NAT_TABLE} dnat_output {raw_rule}")
             if item.get("forwardAllowRule"):
                 forward_rule = _resolve_raw_devgroups(context, str(item["forwardAllowRule"]))
                 lines.append(f"add rule inet {FILTER_TABLE} portmap_forward {forward_rule}")
@@ -303,11 +306,15 @@ def _render_nat(context: UpdateContext, config: FirewallConfig) -> str:
         match = _nat_match(context, item)
         if kind == "portmap":
             to_port = f":{item['toPort']}" if item.get("toPort") is not None else ""
-            lines.append(
-                f"add rule inet {NAT_TABLE} dnat_prerouting {match} "
-                f"{item['proto']} dport {_port_set(item['dport'])} "
+            dnat_rule = (
+                f"{match} {item['proto']} dport {_port_set(item['dport'])} "
                 f"dnat to {item['to']}{to_port}"
             )
+            lines.append(
+                f"add rule inet {NAT_TABLE} dnat_prerouting {dnat_rule}"
+            )
+            if _local_output_enabled(item):
+                lines.append(f"add rule inet {NAT_TABLE} dnat_output {dnat_rule}")
             forward_port = _port_set(item.get("toPort", item["dport"]))
             lines.append(
                 f"add rule inet {FILTER_TABLE} portmap_forward {match} "
@@ -316,7 +323,10 @@ def _render_nat(context: UpdateContext, config: FirewallConfig) -> str:
             if item.get("hairpin"):
                 lines.append(_render_hairpin(item, family))
         elif kind == "ipmap":
-            lines.append(f"add rule inet {NAT_TABLE} dnat_prerouting {match} dnat to {item['to']}")
+            dnat_rule = f"{match} dnat to {item['to']}"
+            lines.append(f"add rule inet {NAT_TABLE} dnat_prerouting {dnat_rule}")
+            if _local_output_enabled(item):
+                lines.append(f"add rule inet {NAT_TABLE} dnat_output {dnat_rule}")
             lines.append(f"add rule inet {FILTER_TABLE} portmap_forward {match} accept")
             if item.get("hairpin"):
                 lines.append(_render_hairpin(item, family))
@@ -435,6 +445,17 @@ def _validate_nat_rules(
         kind = item.get("type")
         if kind not in {"portmap", "ipmap", "snat", "masquerade", "raw"}:
             errors.append(f"Firewall/{obj.name}: spec.natRules[{index}].type is invalid")
+        if _local_output_enabled(item):
+            if kind not in LOCAL_OUTPUT_NAT_TYPES:
+                errors.append(
+                    f"Firewall/{obj.name}: spec.natRules[{index}].localOutput "
+                    "is only supported for portmap, ipmap, and raw"
+                )
+            if item.get("iif"):
+                errors.append(
+                    f"Firewall/{obj.name}: spec.natRules[{index}].localOutput "
+                    "cannot be used with iif"
+                )
         if item.get("hairpin") and kind not in {"portmap", "ipmap"}:
             errors.append(
                 f"Firewall/{obj.name}: spec.natRules[{index}].hairpin "
@@ -657,6 +678,10 @@ def _mapping_value(
     if snake in mapping:
         return mapping[snake]
     return default
+
+
+def _local_output_enabled(item: dict[str, Any]) -> bool:
+    return bool(_mapping_value(item, "localOutput", "local_output", False))
 
 
 def _nat_chain(kind: str) -> str:

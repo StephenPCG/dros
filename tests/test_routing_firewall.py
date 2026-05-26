@@ -573,6 +573,79 @@ spec:
     ) in nft
 
 
+def test_update_firewall_can_apply_dnat_nat_rules_to_local_output(tmp_path: Path) -> None:
+    settings = _settings(tmp_path)
+    settings.paths.configs.mkdir(parents=True)
+    (settings.paths.configs / "firewall.yaml").write_text(
+        """
+kind: Firewall
+metadata:
+  name: main
+spec:
+  natRules:
+    - type: portmap
+      daddr: 198.51.100.10
+      proto: tcp
+      dport: 443
+      to: 10.20.3.83
+      toPort: 6443
+      localOutput: true
+    - type: ipmap
+      daddr: 198.51.100.20
+      to: 10.30.3.83
+      localOutput: true
+""".lstrip(),
+        encoding="utf-8",
+    )
+
+    run_update(settings, target="firewall/main", console=_console(StringIO()))
+
+    nft = (settings.sys_root / "etc/dros/nftables.d/10-firewall.nft").read_text(
+        encoding="utf-8"
+    )
+    portmap_rule = (
+        "meta nfproto ipv4 ip daddr 198.51.100.10 tcp dport 443 "
+        "dnat to 10.20.3.83:6443"
+    )
+    ipmap_rule = "meta nfproto ipv4 ip daddr 198.51.100.20 dnat to 10.30.3.83"
+    assert f"add rule inet dros_nat dnat_prerouting {portmap_rule}" in nft
+    assert f"add rule inet dros_nat dnat_output {portmap_rule}" in nft
+    assert f"add rule inet dros_nat dnat_prerouting {ipmap_rule}" in nft
+    assert f"add rule inet dros_nat dnat_output {ipmap_rule}" in nft
+
+
+def test_update_firewall_rejects_local_output_nat_rule_with_ingress_match(
+    tmp_path: Path,
+) -> None:
+    settings = _settings(tmp_path)
+    settings.paths.configs.mkdir(parents=True)
+    (settings.paths.configs / "firewall.yaml").write_text(
+        """
+kind: Firewall
+metadata:
+  name: main
+spec:
+  natRules:
+    - type: portmap
+      iif: pppoe-wan
+      daddr: 198.51.100.10
+      proto: tcp
+      dport: 443
+      to: 10.20.3.83
+      localOutput: true
+""".lstrip(),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(UpdateValidationError) as exc_info:
+        run_update(settings, target="firewall/main", console=_console(StringIO()))
+
+    assert (
+        "Firewall/main: spec.natRules[0].localOutput cannot be used with iif"
+        in "\n".join(exc_info.value.errors)
+    )
+
+
 def test_update_firewall_validates_hairpin_nat(tmp_path: Path) -> None:
     settings = _settings(tmp_path)
     settings.paths.configs.mkdir(parents=True)
