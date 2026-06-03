@@ -168,7 +168,9 @@ raw rule 中的 `iifgroup devgroup/<name>` 和 `oifgroup devgroup/<name>` 会解
 - `iif` / `oif`：接口名、`interface/<name>` 或 `devgroup/<name>`
 - `saddr` / `daddr` / `daddrNot`：地址匹配
 - `proto`：`tcp` 或 `udp`
-- `dport`：端口、端口集合或端口列表
+- `dport`：端口、端口集合或端口列表。端口列表推荐写成 YAML
+  数组，例如 `dport: [80, 443]`，会渲染为 nft 端口集合
+  `{ 80, 443 }`
 - `to`：DNAT/SNAT 目标
 - `toPort`：DNAT 目标端口
 - `localOutput`：可选，默认 `false`。仅适用于 `portmap`、`ipmap` 和
@@ -180,9 +182,10 @@ raw rule 中的 `iifgroup devgroup/<name>` 和 `oifgroup devgroup/<name>` 会解
 - `forwardAllowRule`：配合 `rawRule` 写入 `portmap_forward`
 
 `portmap` 会生成 DNAT 规则、对应的 `portmap_forward` 放行规则，并在配置
-`hairpin` 时生成额外的 postrouting SNAT 规则。`ipmap` 也支持同样的
-`hairpin` 配置，但因为它是不按端口区分的 IP 映射，生成的 hairpin SNAT
-规则只匹配源网段和 DNAT 后的目标地址，不匹配协议/端口。
+`hairpin` 时生成额外的 postrouting SNAT 规则。`portmap_forward` 放行规则
+匹配 DNAT 后的目标地址和目标端口；DNAT 前的 `daddr` 只用于 NAT 匹配。
+`ipmap` 也支持同样的 `hairpin` 配置，但因为它是不按端口区分的 IP 映射，
+生成的 hairpin SNAT 规则只匹配源网段和 DNAT 后的目标地址，不匹配协议/端口。
 
 默认情况下，`portmap`、`ipmap` 和 `raw` 只写入 `dnat_prerouting`，因此
 只覆盖进入网关后的 DNAT 流量。网关本机进程主动发出的包会走 NAT

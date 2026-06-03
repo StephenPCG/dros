@@ -305,6 +305,7 @@ def _render_nat(context: UpdateContext, config: FirewallConfig) -> str:
         family = str(item.get("family", "ip"))
         match = _nat_match(context, item)
         if kind == "portmap":
+            forward_match = _nat_match(context, item, include_destination=False)
             to_port = f":{item['toPort']}" if item.get("toPort") is not None else ""
             dnat_rule = (
                 f"{match} {item['proto']} dport {_port_set(item['dport'])} "
@@ -317,7 +318,7 @@ def _render_nat(context: UpdateContext, config: FirewallConfig) -> str:
                 lines.append(f"add rule inet {NAT_TABLE} dnat_output {dnat_rule}")
             forward_port = _port_set(item.get("toPort", item["dport"]))
             lines.append(
-                f"add rule inet {FILTER_TABLE} portmap_forward {match} "
+                f"add rule inet {FILTER_TABLE} portmap_forward {forward_match} "
                 f"{family} daddr {item['to']} {item['proto']} dport {forward_port} accept"
             )
             if item.get("hairpin"):
@@ -626,7 +627,12 @@ def _service_match(value: str) -> str:
     return f"{proto} dport {_port_set(port)}"
 
 
-def _nat_match(context: UpdateContext, item: dict[str, Any]) -> str:
+def _nat_match(
+    context: UpdateContext,
+    item: dict[str, Any],
+    *,
+    include_destination: bool = True,
+) -> str:
     parts: list[str] = []
     family = str(item.get("family", "ip"))
     if family == "ip":
@@ -642,10 +648,11 @@ def _nat_match(context: UpdateContext, item: dict[str, Any]) -> str:
                 parts.append(f'{nft_field} "{_nft_string(value.removeprefix("interface/"))}"')
     if item.get("saddr"):
         parts.append(f"{family} saddr {item['saddr']}")
-    if item.get("daddr"):
-        parts.append(f"{family} daddr {item['daddr']}")
-    if item.get("daddrNot"):
-        parts.append(f"{family} daddr != {item['daddrNot']}")
+    if include_destination:
+        if item.get("daddr"):
+            parts.append(f"{family} daddr {item['daddr']}")
+        if item.get("daddrNot"):
+            parts.append(f"{family} daddr != {item['daddrNot']}")
     return " ".join(parts)
 
 

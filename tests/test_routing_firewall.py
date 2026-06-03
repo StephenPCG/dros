@@ -573,6 +573,88 @@ spec:
     ) in nft
 
 
+def test_update_firewall_portmap_forward_matches_post_dnat_destination(
+    tmp_path: Path,
+) -> None:
+    settings = _settings(tmp_path)
+    settings.paths.configs.mkdir(parents=True)
+    (settings.paths.configs / "firewall.yaml").write_text(
+        """
+kind: Firewall
+metadata:
+  name: main
+spec:
+  natRules:
+    - type: portmap
+      family: ip
+      proto: tcp
+      daddr: 180.97.199.39
+      dport: 34522
+      to: 10.80.30.11
+      toPort: 22
+""".lstrip(),
+        encoding="utf-8",
+    )
+
+    run_update(settings, target="firewall/main", console=_console(StringIO()))
+
+    nft = (settings.sys_root / "etc/dros/nftables.d/10-firewall.nft").read_text(
+        encoding="utf-8"
+    )
+    assert (
+        "add rule inet dros_nat dnat_prerouting "
+        "meta nfproto ipv4 ip daddr 180.97.199.39 tcp dport 34522 "
+        "dnat to 10.80.30.11:22"
+    ) in nft
+    assert (
+        "add rule inet dros_filter portmap_forward "
+        "meta nfproto ipv4 ip daddr 10.80.30.11 tcp dport 22 accept"
+    ) in nft
+    assert (
+        "add rule inet dros_filter portmap_forward "
+        "meta nfproto ipv4 ip daddr 180.97.199.39 "
+        "ip daddr 10.80.30.11 tcp dport 22 accept"
+    ) not in nft
+
+
+def test_update_firewall_portmap_accepts_dport_list(tmp_path: Path) -> None:
+    settings = _settings(tmp_path)
+    settings.paths.configs.mkdir(parents=True)
+    (settings.paths.configs / "firewall.yaml").write_text(
+        """
+kind: Firewall
+metadata:
+  name: main
+spec:
+  natRules:
+    - type: portmap
+      family: ip
+      proto: tcp
+      daddr: 180.97.199.39
+      dport:
+        - 80
+        - 443
+      to: 10.80.30.11
+""".lstrip(),
+        encoding="utf-8",
+    )
+
+    run_update(settings, target="firewall/main", console=_console(StringIO()))
+
+    nft = (settings.sys_root / "etc/dros/nftables.d/10-firewall.nft").read_text(
+        encoding="utf-8"
+    )
+    assert (
+        "add rule inet dros_nat dnat_prerouting "
+        "meta nfproto ipv4 ip daddr 180.97.199.39 tcp dport { 80, 443 } "
+        "dnat to 10.80.30.11"
+    ) in nft
+    assert (
+        "add rule inet dros_filter portmap_forward "
+        "meta nfproto ipv4 ip daddr 10.80.30.11 tcp dport { 80, 443 } accept"
+    ) in nft
+
+
 def test_update_firewall_can_apply_dnat_nat_rules_to_local_output(tmp_path: Path) -> None:
     settings = _settings(tmp_path)
     settings.paths.configs.mkdir(parents=True)
