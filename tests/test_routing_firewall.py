@@ -717,7 +717,8 @@ spec:
         encoding="utf-8"
     )
     assert (
-        "tcp flags & (syn | rst) == syn tcp option maxseg size set 1300"
+        "tcp flags & (syn | rst) == syn tcp option maxseg size set 1300 "
+        "counter name dros_forward_mss_clamp"
         in nft
     )
     assert "tcp option maxseg size set rt mtu" not in nft

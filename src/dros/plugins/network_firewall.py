@@ -19,6 +19,7 @@ FILTER_TABLE = "dros_filter"
 ROUTE_TABLE = "dros_route"
 NAT_TABLE = "dros_nat"
 MSS_CLAMP_SYN_MATCH = "tcp flags & (syn | rst) == syn"
+MSS_CLAMP_COUNTER_NAME = "dros_forward_mss_clamp"
 IP_PROTOCOL_SERVICES = frozenset({"gre", "esp", "ah"})
 LOCAL_OUTPUT_NAT_TYPES = frozenset({"portmap", "ipmap", "raw"})
 
@@ -397,10 +398,11 @@ def _validate_model(
 
 
 def _mss_clamp_rule(defaults: dict[str, Any]) -> str:
+    counter = f"counter name {MSS_CLAMP_COUNTER_NAME}"
     size = defaults.get("clampMssSize")
     if size is None:
-        return f"{MSS_CLAMP_SYN_MATCH} tcp option maxseg size set rt mtu"
-    return f"{MSS_CLAMP_SYN_MATCH} tcp option maxseg size set {int(size)}"
+        return f"{MSS_CLAMP_SYN_MATCH} tcp option maxseg size set rt mtu {counter}"
+    return f"{MSS_CLAMP_SYN_MATCH} tcp option maxseg size set {int(size)} {counter}"
 
 
 def _validate_defaults(obj: ConfigObject, defaults: dict[str, Any], errors: list[str]) -> None:
