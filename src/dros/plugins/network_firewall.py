@@ -18,6 +18,9 @@ FIREWALL_PATH = "/etc/dros/nftables.d/10-firewall.nft"
 FILTER_TABLE = "dros_filter"
 ROUTE_TABLE = "dros_route"
 NAT_TABLE = "dros_nat"
+MSS_CLAMP_RULE = (
+    "tcp flags & (syn | rst) == syn tcp option maxseg size set rt mtu"
+)
 IP_PROTOCOL_SERVICES = frozenset({"gre", "esp", "ah"})
 LOCAL_OUTPUT_NAT_TYPES = frozenset({"portmap", "ipmap", "raw"})
 
@@ -116,6 +119,15 @@ def _render_main(defaults: dict[str, Any]) -> str:
         "    jump output_policy",
         "  }",
         "",
+        "  chain forward_mss {",
+        "    type filter hook forward priority mangle; policy accept;",
+    ]
+    if defaults.get("clampMss", True):
+        lines.append(f"    {MSS_CLAMP_RULE}")
+    lines.extend(
+        [
+        "  }",
+        "",
         "  chain forward {",
         f"    type filter hook forward priority filter; policy {forward_policy};",
         "    jump forward_pre",
@@ -157,8 +169,6 @@ def _render_main(defaults: dict[str, Any]) -> str:
             "  chain forward_pre {",
         ]
     )
-    if defaults.get("clampMss", True):
-        lines.append("    tcp flags syn tcp option maxseg size set rt mtu")
     if defaults.get("allowEstablished", True):
         lines.append("    ct state established,related accept")
         lines.append("    ct state invalid drop")

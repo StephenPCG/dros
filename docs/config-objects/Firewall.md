@@ -116,7 +116,7 @@ allowIcmpv6: null
 - `outputPolicy`：`accept` 或 `drop`
 - `allowLoopback`：是否允许 loopback input
 - `allowEstablished`：是否允许 established/related，并 drop invalid
-- `clampMss`：是否在 forward_pre 中设置 TCP MSS clamp
+- `clampMss`：是否在 forward mangle hook 中设置 TCP MSS clamp
 - `allowEssentialIcmp`：是否允许必要 IPv4 ICMP
 - `allowIcmpv6`：是否允许必要 ICMPv6；为 `null` 时跟随 `allowEssentialIcmp`
 
