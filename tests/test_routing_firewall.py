@@ -696,6 +696,56 @@ spec:
     assert f"add rule inet dros_nat dnat_output {ipmap_rule}" in nft
 
 
+def test_update_firewall_renders_fixed_clamp_mss_size(tmp_path: Path) -> None:
+    settings = _settings(tmp_path)
+    settings.paths.configs.mkdir(parents=True)
+    (settings.paths.configs / "firewall.yaml").write_text(
+        """
+kind: Firewall
+metadata:
+  name: main
+spec:
+  defaults:
+    clampMssSize: 1300
+""".lstrip(),
+        encoding="utf-8",
+    )
+
+    run_update(settings, target="firewall/main", console=_console(StringIO()))
+
+    nft = (settings.sys_root / "etc/dros/nftables.d/10-firewall.nft").read_text(
+        encoding="utf-8"
+    )
+    assert (
+        "tcp flags & (syn | rst) == syn tcp option maxseg size set 1300"
+        in nft
+    )
+    assert "tcp option maxseg size set rt mtu" not in nft
+
+
+def test_update_firewall_rejects_invalid_clamp_mss_size(tmp_path: Path) -> None:
+    settings = _settings(tmp_path)
+    settings.paths.configs.mkdir(parents=True)
+    (settings.paths.configs / "firewall.yaml").write_text(
+        """
+kind: Firewall
+metadata:
+  name: main
+spec:
+  defaults:
+    clampMssSize: 100
+""".lstrip(),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(UpdateValidationError) as exc_info:
+        run_update(settings, target="firewall/main", console=_console(StringIO()))
+
+    assert "spec.defaults.clampMssSize must be an integer between 536 and 65495" in "\n".join(
+        exc_info.value.errors
+    )
+
+
 def test_update_firewall_rejects_local_output_nat_rule_with_ingress_match(
     tmp_path: Path,
 ) -> None:

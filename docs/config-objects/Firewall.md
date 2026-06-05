@@ -117,6 +117,7 @@ allowIcmpv6: null
 - `allowLoopback`：是否允许 loopback input
 - `allowEstablished`：是否允许 established/related，并 drop invalid
 - `clampMss`：是否在 forward mangle hook 中设置 TCP MSS clamp
+- `clampMssSize`：可选，固定 MSS 值（如 `1300`）；省略时使用 `rt mtu` 按路径 MTU 计算
 - `allowEssentialIcmp`：是否允许必要 IPv4 ICMP
 - `allowIcmpv6`：是否允许必要 ICMPv6；为 `null` 时跟随 `allowEssentialIcmp`
 

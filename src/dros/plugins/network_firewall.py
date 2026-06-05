@@ -18,9 +18,7 @@ FIREWALL_PATH = "/etc/dros/nftables.d/10-firewall.nft"
 FILTER_TABLE = "dros_filter"
 ROUTE_TABLE = "dros_route"
 NAT_TABLE = "dros_nat"
-MSS_CLAMP_RULE = (
-    "tcp flags & (syn | rst) == syn tcp option maxseg size set rt mtu"
-)
+MSS_CLAMP_SYN_MATCH = "tcp flags & (syn | rst) == syn"
 IP_PROTOCOL_SERVICES = frozenset({"gre", "esp", "ah"})
 LOCAL_OUTPUT_NAT_TYPES = frozenset({"portmap", "ipmap", "raw"})
 
@@ -123,7 +121,7 @@ def _render_main(defaults: dict[str, Any]) -> str:
         "    type filter hook forward priority mangle; policy accept;",
     ]
     if defaults.get("clampMss", True):
-        lines.append(f"    {MSS_CLAMP_RULE}")
+        lines.append(f"    {_mss_clamp_rule(defaults)}")
     lines.extend(
         [
             "  }",
@@ -398,11 +396,25 @@ def _validate_model(
         return None
 
 
+def _mss_clamp_rule(defaults: dict[str, Any]) -> str:
+    size = defaults.get("clampMssSize")
+    if size is None:
+        return f"{MSS_CLAMP_SYN_MATCH} tcp option maxseg size set rt mtu"
+    return f"{MSS_CLAMP_SYN_MATCH} tcp option maxseg size set {int(size)}"
+
+
 def _validate_defaults(obj: ConfigObject, defaults: dict[str, Any], errors: list[str]) -> None:
     for field in ("inputPolicy", "forwardPolicy", "outputPolicy"):
         value = defaults.get(field)
         if value is not None and value not in {"accept", "drop"}:
             errors.append(f"Firewall/{obj.name}: spec.defaults.{field} must be accept or drop")
+    clamp_mss_size = defaults.get("clampMssSize")
+    if clamp_mss_size is not None:
+        if not isinstance(clamp_mss_size, int) or not 536 <= clamp_mss_size <= 65495:
+            errors.append(
+                f"Firewall/{obj.name}: spec.defaults.clampMssSize must be an integer "
+                "between 536 and 65495"
+            )
 
 
 def _validate_interface_rules(
