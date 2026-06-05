@@ -126,20 +126,21 @@ def _render_main(defaults: dict[str, Any]) -> str:
         lines.append(f"    {MSS_CLAMP_RULE}")
     lines.extend(
         [
-        "  }",
-        "",
-        "  chain forward {",
-        f"    type filter hook forward priority filter; policy {forward_policy};",
-        "    jump forward_pre",
-        "    jump portmap_forward",
-        "    jump forward_auto",
-        "    jump forward_user",
-        "    jump forward_post",
-        "    jump forward_policy",
-        "  }",
-        "",
-        "  chain input_pre {",
-    ]
+            "  }",
+            "",
+            "  chain forward {",
+            f"    type filter hook forward priority filter; policy {forward_policy};",
+            "    jump forward_pre",
+            "    jump portmap_forward",
+            "    jump forward_auto",
+            "    jump forward_user",
+            "    jump forward_post",
+            "    jump forward_policy",
+            "  }",
+            "",
+            "  chain input_pre {",
+        ]
+    )
     if defaults.get("allowLoopback", True):
         lines.append("    iif lo accept")
     if defaults.get("allowEstablished", True):
