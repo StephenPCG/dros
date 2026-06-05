@@ -157,11 +157,11 @@ def _render_main(defaults: dict[str, Any]) -> str:
             "  chain forward_pre {",
         ]
     )
+    if defaults.get("clampMss", True):
+        lines.append("    tcp flags syn tcp option maxseg size set rt mtu")
     if defaults.get("allowEstablished", True):
         lines.append("    ct state established,related accept")
         lines.append("    ct state invalid drop")
-    if defaults.get("clampMss", True):
-        lines.append("    tcp flags syn tcp option maxseg size set rt mtu")
     lines.extend(
         [
             "  }",
