@@ -103,24 +103,36 @@ def _render_main(defaults: dict[str, Any]) -> str:
         allow_essential_icmpv6 = allow_essential_icmp
     lines = [
         f"table inet {FILTER_TABLE} {{",
-        "  chain input {",
-        f"    type filter hook input priority filter; policy {input_policy};",
-        "    jump input_pre",
-        "    jump input_auto",
-        "    jump input_user",
-        "    jump input_post",
-        "    jump input_policy",
-        "  }",
-        "",
-        "  chain output {",
-        f"    type filter hook output priority filter; policy {output_policy};",
-        "    jump output_user",
-        "    jump output_policy",
-        "  }",
-        "",
-        "  chain forward_mss {",
-        "    type filter hook forward priority mangle; policy accept;",
     ]
+    if defaults.get("clampMss", True):
+        lines.extend(
+            [
+                f"  counter {MSS_CLAMP_COUNTER_NAME} {{",
+                "  }",
+                "",
+            ]
+        )
+    lines.extend(
+        [
+            "  chain input {",
+            f"    type filter hook input priority filter; policy {input_policy};",
+            "    jump input_pre",
+            "    jump input_auto",
+            "    jump input_user",
+            "    jump input_post",
+            "    jump input_policy",
+            "  }",
+            "",
+            "  chain output {",
+            f"    type filter hook output priority filter; policy {output_policy};",
+            "    jump output_user",
+            "    jump output_policy",
+            "  }",
+            "",
+            "  chain forward_mss {",
+            "    type filter hook forward priority mangle; policy accept;",
+        ]
+    )
     if defaults.get("clampMss", True):
         lines.append(f"    {_mss_clamp_rule(defaults)}")
     lines.extend(

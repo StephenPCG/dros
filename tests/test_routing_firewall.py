@@ -518,7 +518,12 @@ spec:
         encoding="utf-8"
     )
     assert "table inet dros_filter" in nft
+    assert "counter dros_forward_mss_clamp" in nft
     assert "type filter hook input priority filter; policy drop;" in nft
+    assert (
+        "tcp flags & (syn | rst) == syn tcp option maxseg size set rt mtu "
+        "counter name dros_forward_mss_clamp"
+    ) in nft
     assert "add rule inet dros_filter input_user tcp dport 22 accept" in nft
     assert "add rule inet dros_filter input_auto iifgroup 1 udp dport 500 accept" in nft
     assert "add rule inet dros_filter input_auto iifgroup 1 meta l4proto gre accept" in nft
