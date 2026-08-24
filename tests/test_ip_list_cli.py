@@ -82,6 +82,8 @@ def test_ip_list_sources_command_lists_builtin_sources(capsys) -> None:
     assert cli_main.main(["ip-list", "sources"]) == 0
 
     output = capsys.readouterr().out
+    assert "azure" in output
     assert "china" in output
     assert "github" in output
+    assert "microsoft" in output
     assert "tencent" in output

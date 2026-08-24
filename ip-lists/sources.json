@@ -1,6 +1,6 @@
 {
   "failure_count": 0,
-  "generated_at": 1778407753,
+  "generated_at": 1787586298,
   "results": [
     {
       "ipv4_count": 5881,
@@ -8,6 +8,13 @@
       "name": "amazon",
       "ok": true,
       "source": "https://ip-ranges.amazonaws.com/ip-ranges.json"
+    },
+    {
+      "ipv4_count": 11326,
+      "ipv6_count": 4059,
+      "name": "azure",
+      "ok": true,
+      "source": "https://raw.githubusercontent.com/microsoft/mstic/master/PublicFeeds/MSFTIPRanges/ServiceTags_Public.json#AzureCloud"
     },
     {
       "ipv4_count": 4201,
@@ -45,6 +52,13 @@
       "source": "https://www.gstatic.com/ipranges/goog.json"
     },
     {
+      "ipv4_count": 514,
+      "ipv6_count": 17,
+      "name": "microsoft",
+      "ok": true,
+      "source": "https://raw.githubusercontent.com/microsoft/mstic/master/PublicFeeds/MSFTIPRanges/MSFT_PublicIPs.csv"
+    },
+    {
       "ipv4_count": 9,
       "ipv6_count": 5,
       "name": "telegram",
@@ -68,11 +82,13 @@
   ],
   "selected_sources": [
     "amazon",
+    "azure",
     "china",
     "cloudflare",
     "fastly",
     "github",
     "google",
+    "microsoft",
     "telegram",
     "tencent",
     "wikipedia"

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import csv
+import io
 import ipaddress
 import json
 import os
@@ -24,11 +26,13 @@ CIDR_RE = re.compile(
 
 AVAILABLE_IP_LIST_SOURCES = (
     "amazon",
+    "azure",
     "china",
     "cloudflare",
     "fastly",
     "github",
     "google",
+    "microsoft",
     "telegram",
     "tencent",
     "wikipedia",
@@ -36,6 +40,9 @@ AVAILABLE_IP_LIST_SOURCES = (
 
 TENCENT_ASNS = (45090, 132203, 133478, 132591, 139341, 9390, 137876)
 RIPESTAT_ANNOUNCED_PREFIXES_URL = "https://stat.ripe.net/data/announced-prefixes/data.json"
+MSFT_IP_RANGES_BASE = "https://raw.githubusercontent.com/microsoft/mstic/master/PublicFeeds/MSFTIPRanges"
+MICROSOFT_PUBLIC_IPS_URL = f"{MSFT_IP_RANGES_BASE}/MSFT_PublicIPs.csv"
+AZURE_SERVICE_TAGS_PUBLIC_URL = f"{MSFT_IP_RANGES_BASE}/ServiceTags_Public.json"
 
 IpListFamily = Literal["mixed", "ipv4", "ipv6"]
 RequestedFamily = Literal["auto", "all", "ipv4", "ipv6"]
@@ -230,6 +237,17 @@ class IpListUpdater:
             ipv6=_normalize_cidrs(ipv6),
         )
 
+    def _fetch_azure(self) -> FetchResult:
+        payload = self._get_json(AZURE_SERVICE_TAGS_PUBLIC_URL)
+        cidrs = _extract_azure_service_tag_prefixes(payload, "AzureCloud")
+        ipv4, ipv6 = _split_families(_normalize_cidrs(cidrs))
+        return FetchResult(
+            name="azure",
+            source=f"{AZURE_SERVICE_TAGS_PUBLIC_URL}#AzureCloud",
+            ipv4=ipv4,
+            ipv6=ipv6,
+        )
+
     def _fetch_cloudflare(self) -> FetchResult:
         ipv4 = _normalize_cidrs(self._get_text_lines("https://www.cloudflare.com/ips-v4"))
         ipv6 = _normalize_cidrs(self._get_text_lines("https://www.cloudflare.com/ips-v6"))
@@ -266,6 +284,19 @@ class IpListUpdater:
         cidrs = _extract_prefixes(payload.get("prefixes", []))
         ipv4, ipv6 = _split_families(_normalize_cidrs(cidrs))
         return FetchResult(name="google", source="https://www.gstatic.com/ipranges/goog.json", ipv4=ipv4, ipv6=ipv6)
+
+    def _fetch_microsoft(self) -> FetchResult:
+        reader = csv.DictReader(io.StringIO(self._get_text(MICROSOFT_PUBLIC_IPS_URL)))
+        cidrs = [row["Prefix"] for row in reader if row.get("Prefix")]
+        if not cidrs:
+            raise ValueError("expected Microsoft public IP prefixes")
+        ipv4, ipv6 = _split_families(_normalize_cidrs(cidrs))
+        return FetchResult(
+            name="microsoft",
+            source=MICROSOFT_PUBLIC_IPS_URL,
+            ipv4=ipv4,
+            ipv6=ipv6,
+        )
 
     def _fetch_telegram(self) -> FetchResult:
         cidrs = _normalize_cidrs(self._get_text_lines("https://core.telegram.org/resources/cidr.txt"))
@@ -466,6 +497,23 @@ def _extract_prefixes(items: Iterable[dict[str, Any]]) -> list[str]:
         if isinstance(ipv6, str):
             cidrs.append(ipv6)
     return cidrs
+
+
+def _extract_azure_service_tag_prefixes(payload: dict[str, Any], tag_name: str) -> list[str]:
+    values = payload.get("values")
+    if not isinstance(values, list):
+        raise ValueError("expected Azure service tags values list")
+    for item in values:
+        if not isinstance(item, dict) or item.get("name") != tag_name:
+            continue
+        properties = item.get("properties")
+        if not isinstance(properties, dict):
+            raise ValueError(f"expected properties for Azure service tag {tag_name!r}")
+        prefixes = properties.get("addressPrefixes")
+        if not isinstance(prefixes, list):
+            raise ValueError(f"expected addressPrefixes for Azure service tag {tag_name!r}")
+        return [prefix for prefix in prefixes if isinstance(prefix, str)]
+    raise ValueError(f"Azure service tag {tag_name!r} not found")
 
 
 def _looks_like_network(value: str) -> bool:

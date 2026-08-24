@@ -5,7 +5,14 @@ from pathlib import Path
 
 from rich.console import Console
 
-from dros.ip_lists import IpListUpdater, load_ip_lists, summarize_ip_lists, update_ip_lists
+from dros.ip_lists import (
+    AZURE_SERVICE_TAGS_PUBLIC_URL,
+    MICROSOFT_PUBLIC_IPS_URL,
+    IpListUpdater,
+    load_ip_lists,
+    summarize_ip_lists,
+    update_ip_lists,
+)
 from dros.settings import DrosPaths, DrosSettings
 
 
@@ -77,6 +84,67 @@ def test_ip_list_updater_writes_sources_to_run_directory(tmp_path: Path) -> None
         "2001:db8::/32\n"
     )
     assert "ok: china v4=1 v6=1" in output.getvalue()
+
+
+def test_azure_source_fetches_azure_cloud_service_tag_prefixes(monkeypatch) -> None:
+    requested_urls: list[str] = []
+
+    def fake_get_json(self, url: str):  # type: ignore[no-untyped-def]
+        requested_urls.append(url)
+        return {
+            "values": [
+                {
+                    "name": "Storage",
+                    "properties": {"addressPrefixes": ["203.0.113.0/24"]},
+                },
+                {
+                    "name": "AzureCloud",
+                    "properties": {
+                        "addressPrefixes": [
+                            "20.0.0.0/8",
+                            "2603:1000::/24",
+                            "20.0.0.0/8",
+                        ],
+                    },
+                },
+            ]
+        }
+
+    monkeypatch.setattr(IpListUpdater, "_get_json", fake_get_json)
+
+    result = IpListUpdater()._fetch_source("azure")
+
+    assert result.name == "azure"
+    assert result.source == f"{AZURE_SERVICE_TAGS_PUBLIC_URL}#AzureCloud"
+    assert result.ipv4 == ["20.0.0.0/8"]
+    assert result.ipv6 == ["2603:1000::/24"]
+    assert requested_urls == [AZURE_SERVICE_TAGS_PUBLIC_URL]
+
+
+def test_microsoft_source_fetches_public_ip_csv_prefixes(monkeypatch) -> None:
+    requested_urls: list[str] = []
+
+    def fake_get_text(self, url: str):  # type: ignore[no-untyped-def]
+        requested_urls.append(url)
+        return "\n".join(
+            [
+                "Prefix,Type",
+                "4.128.0.0/12, MSFT Public IP Address Block",
+                "2603:1000::/24, MSFT Public IP Address Block",
+                "4.128.0.0/12, MSFT Public IP Address Block",
+                "",
+            ]
+        )
+
+    monkeypatch.setattr(IpListUpdater, "_get_text", fake_get_text)
+
+    result = IpListUpdater()._fetch_source("microsoft")
+
+    assert result.name == "microsoft"
+    assert result.source == MICROSOFT_PUBLIC_IPS_URL
+    assert result.ipv4 == ["4.128.0.0/12"]
+    assert result.ipv6 == ["2603:1000::/24"]
+    assert requested_urls == [MICROSOFT_PUBLIC_IPS_URL]
 
 
 def test_tencent_source_fetches_collapsed_ipv6_prefixes_for_tencent_asns(monkeypatch) -> None:
