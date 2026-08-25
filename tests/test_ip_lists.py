@@ -6,6 +6,7 @@ from pathlib import Path
 from rich.console import Console
 
 from dros.ip_lists import (
+    ANTHROPIC_ASNS,
     AZURE_SERVICE_TAGS_PUBLIC_URL,
     MICROSOFT_PUBLIC_IPS_URL,
     IpListUpdater,
@@ -84,6 +85,42 @@ def test_ip_list_updater_writes_sources_to_run_directory(tmp_path: Path) -> None
         "2001:db8::/32\n"
     )
     assert "ok: china v4=1 v6=1" in output.getvalue()
+
+
+def test_anthropic_source_fetches_announced_prefixes_for_anthropic_asns(monkeypatch) -> None:
+    requested_urls: list[str] = []
+
+    payloads = {
+        "399358": [
+            {"prefix": "160.79.104.0/23"},
+            {"prefix": "2607:6bc0::/48"},
+            {"prefix": "2607:6bc0:11::/48"},
+        ],
+        "60808": [
+            {"prefix": "209.249.57.0/24"},
+            {"prefix": "160.79.104.0/23"},
+        ],
+    }
+
+    def fake_get_json(self, url: str):  # type: ignore[no-untyped-def]
+        requested_urls.append(url)
+        asn = url.split("resource=AS", 1)[1].split("&", 1)[0]
+        return {"data": {"prefixes": payloads.get(asn, [])}}
+
+    monkeypatch.setattr(IpListUpdater, "_get_json", fake_get_json)
+
+    result = IpListUpdater()._fetch_source("anthropic")
+
+    assert result.name == "anthropic"
+    assert result.ipv4 == ["160.79.104.0/23", "209.249.57.0/24"]
+    assert result.ipv6 == ["2607:6bc0::/48", "2607:6bc0:11::/48"]
+    assert requested_urls == [
+        (
+            f"https://stat.ripe.net/data/announced-prefixes/data.json?resource=AS{asn}"
+            "&min_peers_seeing=1&sourceapp=dros_gateway"
+        )
+        for asn in ANTHROPIC_ASNS
+    ]
 
 
 def test_azure_source_fetches_azure_cloud_service_tag_prefixes(monkeypatch) -> None:

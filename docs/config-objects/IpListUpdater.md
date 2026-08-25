@@ -119,12 +119,13 @@ gw ip-list update
 gw ip-list sources
 ```
 
-当前内置 source 包括 `amazon`、`azure`、`china`、`cloudflare`、`fastly`、
-`github`、`google`、`microsoft`、`telegram`、`tencent`、`wikipedia`。
-其中 `azure` 使用 Microsoft MSTIC 的 Azure Public Cloud Service Tags 中的
-`AzureCloud` 标签，`microsoft` 使用 Microsoft MSTIC 的公共 IP 段 CSV；
-`tencent` 通过 RIPEstat 查询腾讯相关 ASN 当前宣告的 IPv6 前缀，IPv4 列表
-保持为空，适合只对腾讯 IPv6 做 `unreachable` 之类的降级策略。
+当前内置 source 包括 `amazon`、`anthropic`、`azure`、`china`、`cloudflare`、
+`fastly`、`github`、`google`、`microsoft`、`telegram`、`tencent`、
+`wikipedia`。其中 `anthropic` 通过 RIPEstat 查询 Anthropic 相关 ASN 当前
+宣告的 IPv4/IPv6 前缀；`azure` 使用 Microsoft MSTIC 的 Azure Public Cloud
+Service Tags 中的 `AzureCloud` 标签，`microsoft` 使用 Microsoft MSTIC 的公共
+IP 段 CSV；`tencent` 通过 RIPEstat 查询腾讯相关 ASN 当前宣告的 IPv6 前缀，
+IPv4 列表保持为空，适合只对腾讯 IPv6 做 `unreachable` 之类的降级策略。
 
 只更新部分 source：
 

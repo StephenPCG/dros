@@ -26,6 +26,7 @@ CIDR_RE = re.compile(
 
 AVAILABLE_IP_LIST_SOURCES = (
     "amazon",
+    "anthropic",
     "azure",
     "china",
     "cloudflare",
@@ -38,6 +39,7 @@ AVAILABLE_IP_LIST_SOURCES = (
     "wikipedia",
 )
 
+ANTHROPIC_ASNS = (399358, 60808, 400243, 401551, 4167)
 TENCENT_ASNS = (45090, 132203, 133478, 132591, 139341, 9390, 137876)
 RIPESTAT_ANNOUNCED_PREFIXES_URL = "https://stat.ripe.net/data/announced-prefixes/data.json"
 MSFT_IP_RANGES_BASE = "https://raw.githubusercontent.com/microsoft/mstic/master/PublicFeeds/MSFTIPRanges"
@@ -237,6 +239,17 @@ class IpListUpdater:
             ipv6=_normalize_cidrs(ipv6),
         )
 
+    def _fetch_anthropic(self) -> FetchResult:
+        cidrs = self._fetch_announced_prefixes(ANTHROPIC_ASNS, family="all")
+        ipv4, ipv6 = _split_families(_normalize_cidrs(cidrs))
+        source_asns = ", ".join(f"AS{asn}" for asn in ANTHROPIC_ASNS)
+        return FetchResult(
+            name="anthropic",
+            source=f"RIPEstat announced-prefixes for {source_asns}",
+            ipv4=ipv4,
+            ipv6=ipv6,
+        )
+
     def _fetch_azure(self) -> FetchResult:
         payload = self._get_json(AZURE_SERVICE_TAGS_PUBLIC_URL)
         cidrs = _extract_azure_service_tag_prefixes(payload, "AzureCloud")
@@ -304,22 +317,7 @@ class IpListUpdater:
         return FetchResult(name="telegram", source="https://core.telegram.org/resources/cidr.txt", ipv4=ipv4, ipv6=ipv6)
 
     def _fetch_tencent(self) -> FetchResult:
-        cidrs: list[str] = []
-        for asn in TENCENT_ASNS:
-            url = (
-                f"{RIPESTAT_ANNOUNCED_PREFIXES_URL}?resource=AS{asn}"
-                "&min_peers_seeing=1&sourceapp=dros_gateway"
-            )
-            payload = self._get_json(url)
-            prefixes = payload.get("data", {}).get("prefixes", [])
-            if not isinstance(prefixes, list):
-                raise ValueError(f"expected RIPEstat prefixes list for AS{asn}")
-            for item in prefixes:
-                if not isinstance(item, dict):
-                    continue
-                prefix = item.get("prefix")
-                if isinstance(prefix, str) and ":" in prefix:
-                    cidrs.append(prefix)
+        cidrs = self._fetch_announced_prefixes(TENCENT_ASNS, family="ipv6")
         source_asns = ", ".join(f"AS{asn}" for asn in TENCENT_ASNS)
         return FetchResult(
             name="tencent",
@@ -351,6 +349,35 @@ class IpListUpdater:
         if not isinstance(payload, dict):
             raise ValueError(f"expected JSON object from {url}")
         return payload
+
+    def _fetch_announced_prefixes(
+        self,
+        asns: Iterable[int],
+        *,
+        family: Literal["all", "ipv4", "ipv6"],
+    ) -> list[str]:
+        cidrs: list[str] = []
+        for asn in asns:
+            url = (
+                f"{RIPESTAT_ANNOUNCED_PREFIXES_URL}?resource=AS{asn}"
+                "&min_peers_seeing=1&sourceapp=dros_gateway"
+            )
+            payload = self._get_json(url)
+            prefixes = payload.get("data", {}).get("prefixes", [])
+            if not isinstance(prefixes, list):
+                raise ValueError(f"expected RIPEstat prefixes list for AS{asn}")
+            for item in prefixes:
+                if not isinstance(item, dict):
+                    continue
+                prefix = item.get("prefix")
+                if not isinstance(prefix, str):
+                    continue
+                if family == "ipv4" and ":" in prefix:
+                    continue
+                if family == "ipv6" and ":" not in prefix:
+                    continue
+                cidrs.append(prefix)
+        return cidrs
 
 
 def load_ip_lists(settings: DrosSettings) -> IpListStore:

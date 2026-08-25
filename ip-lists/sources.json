@@ -1,6 +1,6 @@
 {
   "failure_count": 0,
-  "generated_at": 1787586298,
+  "generated_at": 1787630694,
   "results": [
     {
       "ipv4_count": 5881,
@@ -8,6 +8,13 @@
       "name": "amazon",
       "ok": true,
       "source": "https://ip-ranges.amazonaws.com/ip-ranges.json"
+    },
+    {
+      "ipv4_count": 2,
+      "ipv6_count": 2,
+      "name": "anthropic",
+      "ok": true,
+      "source": "RIPEstat announced-prefixes for AS399358, AS60808, AS400243, AS401551, AS4167"
     },
     {
       "ipv4_count": 11326,
@@ -82,6 +89,7 @@
   ],
   "selected_sources": [
     "amazon",
+    "anthropic",
     "azure",
     "china",
     "cloudflare",
