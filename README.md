@@ -24,6 +24,7 @@ uv sync
 uv run gw help
 uv run gw update iface/br0
 uv run gw update iface/tailscale0
+uv run gw delete iface/gre-old
 uv run gw ovpn list instances
 uv run gw restart daemon
 uv run gw restart web
@@ -50,6 +51,10 @@ for the password interactively.
 The Debian test host is documented in `docs/lab/test-gw.md`.
 
 Bootstrap and plugin design notes live in `docs/bootstrap.md`.
+
+Resource uninstall previews, supported lifecycles and shared-interface peer
+removal are documented in [docs/delete.md](docs/delete.md). `gw delete` keeps
+source YAML and only executes the previewed removal with `--apply`.
 
 OpenVPN instance, profile, certificate, and Web management notes live in
 `docs/openvpn.md`.

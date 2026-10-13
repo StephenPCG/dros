@@ -289,7 +289,9 @@ Interface 名称，也是最终 Linux interface name。
 是否禁用该对象。
 
 设置为 `true` 后，这个对象会被忽略，效果等同于文件不存在。当前 `gw update` 不会因为
-disabled 自动删除已经写入系统的旧文件，后续由 `gw remove` 处理清理。
+disabled 自动删除已经写入系统的旧文件。支持的接口类型应先保持源对象存在，执行
+`gw delete iface/<name>` 预览，再用 `--apply` 卸载，成功后才删除或禁用源对象。
+支持范围和共享资源边界见 [资源卸载](../delete.md)。
 
 默认值：`false`。
 

@@ -139,8 +139,10 @@ For singleton kinds, if no `metadata.name: default` object exists but there is
 exactly one object of that kind, DROS uses that object. This keeps names like
 `system` valid while still detecting ambiguous duplicate singleton objects.
 
-Objects with `metadata.disabled: true` are ignored. If the system side also
-needs cleanup, run the future `gw remove kind/name` command.
+Objects with `metadata.disabled: true` are ignored. To clean up supported system
+resources, keep the object enabled and present while running `gw delete kind/name`
+and then `gw delete kind/name --apply`. Remove or disable the source afterward.
+See [resource uninstall](delete.md) for supported kinds and shared-state limits.
 
 ## Config Directory Semantics
 

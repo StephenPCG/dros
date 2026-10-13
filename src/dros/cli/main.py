@@ -27,6 +27,7 @@ from dros.config_objects import (
 )
 from dros.config_catalog import render_config_object_example
 from dros.dnsmasq_china_names import DnsmasqChinaNamesUpdater
+from dros.delete import apply_delete_plan, build_delete_plan, print_delete_plan
 from dros.events import enqueue_event, process_event
 from dros.invocation_log import append_error_log, append_invocation_log
 from dros.ip_lists import AVAILABLE_IP_LIST_SOURCES, load_ip_lists, summarize_ip_lists, update_ip_lists
@@ -636,10 +637,24 @@ def web_passwd(username: str, password: str | None = None) -> None:
     console.print(f"[green]updated[/green] password for web user {username.strip()}")
 
 
-@app.command
-def remove(target: str) -> None:
-    """Remove a managed object from the system."""
-    _not_ready(f"gw remove {target}")
+@app.command(name="delete", alias="remove")
+def delete_command(target: str, *, apply: bool = False) -> None:
+    """Preview uninstalling kind[/name]; --apply executes it, retaining source YAML."""
+    try:
+        settings = _load_cli_settings()
+        if apply:
+            _ensure_bootstrap_privileges(settings)
+            with _manual_cli_lock(settings):
+                plan = build_delete_plan(settings, target)
+                print_delete_plan(plan, console)
+                apply_delete_plan(settings, plan, console=console)
+        else:
+            # No sudo, lock, logs, temporary directories or mutating commands in preview.
+            print_delete_plan(build_delete_plan(settings, target), console)
+            console.print("Preview only; use --apply to execute this uninstall.", markup=False)
+    except (KeyError, OSError, RuntimeError, ValueError, subprocess.SubprocessError) as exc:
+        error_console.print(f"delete failed: {exc}", markup=False)
+        raise SystemExit(1) from exc
 
 
 @app.command
@@ -811,7 +826,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     _current_raw_args = raw_args
     _current_settings_path = _extract_settings_path(raw_args)
     args = _normalize_help(_strip_global_options(raw_args))
-    log_settings = _try_load_cli_settings_for_logging()
+    # delete preview is strictly read-only, including the usual invocation log.
+    # Apply failures/results are printed by the command. Keep this guard independent
+    # of boolean flag syntax so --no-apply and malformed previews cannot write logs.
+    log_settings = None if args and args[0] in {"delete", "remove"} else _try_load_cli_settings_for_logging()
     started_at = time.monotonic()
     if log_settings is not None:
         append_invocation_log(log_settings, kind="cli", phase="start", argv=raw_args)
