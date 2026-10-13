@@ -85,3 +85,29 @@ fix the cause, and preview again before retrying. Uninstalling the interface
 carrying your management connection can disconnect you; use an independent
 management path when retiring it.
 
+## Removing a peer from a shared WireGuard interface
+
+Keep the shared interface. Remove only the peer from its complete YAML `peers`
+list, then run `gw update iface/<name>`. Each selected existing interface applies
+`wg addconf`, reads the actual peer list, explicitly removes only keys absent
+from source, and verifies the final peer set. It reconciles even when the
+rendered file has not changed, so historical leftover peers and failed previous
+applications can be corrected without bouncing the interface.
+
+The source peer list is authoritative. Peers installed manually outside it are
+removed; all peers to retain must be in YAML. `addconf` preserves unspecified
+interface fields, including a key previously loaded through `privateKeyFile`,
+a runtime listen port and fwmark. It also preserves omitted endpoint, preshared
+key and keepalive fields of retained peers. An explicit endpoint is reapplied
+from source. Using `syncconf` here would reset some omitted interface fields,
+so deletion of surplus peers is explicit instead.
+
+The supported wgsd-client updates endpoints of existing peers with `UpdateOnly`
+and does not recreate deleted peers. Empty `peers` removes all peers. A failed
+add/read/remove/verification stops the update with an error; another update
+retries the reconciliation even if the file was already written.
+
+Upstream contracts: [WireGuard configuration defaults](https://git.zx2c4.com/wireguard-tools/tree/src/config.c),
+[WireGuard peer synchronization](https://git.zx2c4.com/wireguard-tools/tree/src/setconf.c),
+[WireGuard kernel endpoint update](https://git.zx2c4.com/wireguard-linux/tree/drivers/net/wireguard/netlink.c),
+[wgsd-client endpoint discovery](https://github.com/jwhited/wgsd/blob/master/cmd/wgsd-client/main.go).

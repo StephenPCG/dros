@@ -1376,7 +1376,7 @@ spec:
     assert "warning: Interface/wg0: /usr/local/bin/wgsd-client is not installed" in output.getvalue()
 
 
-def test_update_wireguard_uses_addconf_when_only_wireguard_conf_changes(tmp_path: Path) -> None:
+def test_update_wireguard_reconciles_when_only_wireguard_conf_changes(tmp_path: Path) -> None:
     settings = _settings(tmp_path)
     settings.paths.configs.mkdir(parents=True)
     config_path = settings.paths.configs / "wg.yaml"
@@ -1419,7 +1419,7 @@ spec:
     result = run_update(settings, target="iface/wg0", console=_console(StringIO()))
 
     commands = [" ".join(action.command or []) for action in result.actions if action.command]
-    assert any("wg addconf wg0 /etc/wireguard/wg0.conf" in command for command in commands)
+    assert any("dros-wireguard-reconcile wg0 /etc/wireguard/wg0.conf" in command for command in commands)
     assert not any(command == "ifdown --force wg0" for command in commands)
 
 

@@ -144,12 +144,10 @@ def update(context: UpdateContext, objects: list[ConfigObject]) -> None:
             path,
             _render_interface(context, obj.name, config, devgroups),
         )
-        if (
-            iface_type == "wireguard"
-            and aux_changes.wireguard_conf_changed
-            and not iface_changed
-        ):
-            _wireguard_addconf(context, obj.name)
+        if iface_type == "wireguard" and not iface_changed:
+            # Reconcile even when the file is unchanged: a previous command may
+            # have failed after writing it, or older addconf left removed peers.
+            _wireguard_reconcile(context, obj.name, config)
         elif iface_changed or aux_changes.changed:
             _reload_ifupdown_interface(context, obj.name, config)
         if nft_changed and _firewall_has_been_applied(context):
@@ -979,22 +977,56 @@ def _render_wireguard_iface(name: str, config: InterfaceConfig) -> list[str]:
     return lines
 
 
-def _wireguard_addconf(context: UpdateContext, name: str) -> None:
-    safe_name = _safe_name(name)
-    quoted_name = shlex.quote(name)
-    quoted_config = shlex.quote(f"/etc/wireguard/{safe_name}.conf")
+def _wireguard_reconcile(context: UpdateContext, name: str, config: InterfaceConfig) -> None:
+    public_keys = [str(_peer_value(peer, "publicKey", "public_key")) for peer in config.peers]
     context.executor.run(
-        [
-            "sh",
-            "-c",
-            (
-                f"if ip link show dev {quoted_name} >/dev/null 2>&1; then "
-                f"wg addconf {quoted_name} {quoted_config}; "
-                f"else ifup {quoted_name}; fi"
-            ),
-        ],
+        _wireguard_reconcile_command(name, f"/etc/wireguard/{_safe_name(name)}.conf", public_keys),
         real_only=True,
     )
+
+
+def _wireguard_reconcile_command(name: str, config_path: str, public_keys: list[str]) -> list[str]:
+    # addconf preserves interface fields omitted from the generated file, notably
+    # privateKeyFile-loaded keys and runtime listen ports/fwmarks. syncconf uses
+    # setconf's defaults and would reset those fields. Remove only extra peers.
+    return ["sh", "-c", r'''set -eu
+iface=$1
+config=$2
+shift 2
+if ! ip link show dev "$iface" >/dev/null 2>&1; then
+    exec ifup "$iface"
+fi
+wg addconf "$iface" "$config"
+current=$(wg show "$iface" peers)
+for peer in $current; do
+    keep=false
+    for wanted do
+        if [ "$peer" = "$wanted" ]; then keep=true; break; fi
+    done
+    if [ "$keep" = false ]; then wg set "$iface" peer "$peer" remove; fi
+done
+current=$(wg show "$iface" peers)
+for peer in $current; do
+    keep=false
+    for wanted do
+        if [ "$peer" = "$wanted" ]; then keep=true; break; fi
+    done
+    if [ "$keep" = false ]; then
+        echo "dros: unexpected WireGuard peer remains after reconciliation" >&2
+        exit 1
+    fi
+done
+for wanted do
+    found=false
+    for peer in $current; do
+        if [ "$peer" = "$wanted" ]; then found=true; break; fi
+    done
+    if [ "$found" = false ]; then
+        echo "dros: configured WireGuard peer missing after reconciliation" >&2
+        exit 1
+    fi
+done
+''', "dros-wireguard-reconcile", name, config_path, *public_keys]
 
 
 def _write_wgsd_cron(context: UpdateContext, name: str, config: InterfaceConfig) -> bool:
