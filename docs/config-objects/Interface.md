@@ -569,8 +569,11 @@ wg set $IFACE private-key <privateKeyFile>
 加载优先级与 route 使用 IP list 时一致：`configs/ip-lists`、`run/ip-lists`、
 源码内置 `ip-lists`。
 
-如果 `/etc/wireguard/<name>.conf` 是本轮唯一变化，DROS 会优先执行 `wg addconf`
-热更新；interface fragment 或其他辅助文件变化时仍然走 ifdown/ifup。
+接口配置片段未变时，DROS 会执行 `wg addconf` 热更新，并删除源配置中已移除的
+运行 peer、核验保留的 peer；即使生成文件没有变化，也会核对运行状态。
+完整 mesh 清单可以包含接口自身公钥，该条目由 WireGuard 忽略，DROS 使用应用后的
+接口公钥将其排除出运行 peer 核验。接口配置片段或其他需要重启的辅助文件变化时
+仍然走 ifdown/ifup。失败信息会标明接口和步骤，避免显示可能含私钥的原始命令输出。
 
 ### `spec.wgsdClient`
 

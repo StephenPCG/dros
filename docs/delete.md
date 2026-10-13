@@ -95,7 +95,10 @@ rendered file has not changed, so historical leftover peers and failed previous
 applications can be corrected without bouncing the interface.
 
 The source peer list is authoritative. Peers installed manually outside it are
-removed; all peers to retain must be in YAML. `addconf` preserves unspecified
+removed; all peers to retain must be in YAML. A shared full-mesh list may include
+the interface's own public key: WireGuard ignores that entry, and DROS excludes
+it from the required runtime peers. The comparison uses the applied interface
+public key, so it also handles private-key rotation. `addconf` preserves unspecified
 interface fields, including a key previously loaded through `privateKeyFile`,
 a runtime listen port and fwmark. It also preserves omitted endpoint, preshared
 key and keepalive fields of retained peers. An explicit endpoint is reapplied
@@ -105,7 +108,9 @@ so deletion of surplus peers is explicit instead.
 The supported wgsd-client updates endpoints of existing peers with `UpdateOnly`
 and does not recreate deleted peers. Empty `peers` removes all peers. A failed
 add/read/remove/verification stops the update with an error; another update
-retries the reconciliation even if the file was already written.
+retries the reconciliation even if the file was already written. Failures report
+the interface and failed stage; raw WireGuard output is suppressed even in
+verbose mode because malformed configuration errors can contain private keys.
 
 Upstream contracts: [WireGuard configuration defaults](https://git.zx2c4.com/wireguard-tools/tree/src/config.c),
 [WireGuard peer synchronization](https://git.zx2c4.com/wireguard-tools/tree/src/setconf.c),

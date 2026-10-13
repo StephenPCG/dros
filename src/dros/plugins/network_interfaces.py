@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import ipaddress
 import shlex
+import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -979,10 +980,34 @@ def _render_wireguard_iface(name: str, config: InterfaceConfig) -> list[str]:
 
 def _wireguard_reconcile(context: UpdateContext, name: str, config: InterfaceConfig) -> None:
     public_keys = [str(_peer_value(peer, "publicKey", "public_key")) for peer in config.peers]
-    context.executor.run(
-        _wireguard_reconcile_command(name, f"/etc/wireguard/{_safe_name(name)}.conf", public_keys),
-        real_only=True,
-    )
+    # wg can include the offending configuration line in an error, including
+    # private key material. Keep its output private even at verbose=2 and expose
+    # only a stage-specific diagnostic through the shell's reserved exit codes.
+    visible = context.executor.is_real_root and context.executor.verbose >= 1
+    if visible:
+        context.executor.console.print(f"run: reconcile WireGuard interface {name}", markup=False)
+    try:
+        context.executor.run(
+            _wireguard_reconcile_command(name, f"/etc/wireguard/{_safe_name(name)}.conf", public_keys),
+            real_only=True,
+            quiet=True,
+        )
+    except subprocess.CalledProcessError as exc:
+        stage = {
+            81: "applying configuration (wg addconf)",
+            82: "reading the interface public key",
+            83: "reading runtime peers",
+            84: "removing a stale peer",
+            85: "verifying that stale peers were removed",
+            86: "verifying configured peers: a non-local peer is missing",
+            87: "bringing up the missing interface",
+        }.get(exc.returncode, "running the reconciliation command")
+        raise RuntimeError(
+            f"Interface/{name}: WireGuard reconciliation failed while {stage} "
+            f"(stage exit {exc.returncode}); raw command output is suppressed to protect keys"
+        ) from None
+    if visible:
+        context.executor.console.print(f"ok: reconcile WireGuard interface {name}", markup=False)
 
 
 def _wireguard_reconcile_command(name: str, config_path: str, public_keys: list[str]) -> list[str]:
@@ -994,36 +1019,41 @@ iface=$1
 config=$2
 shift 2
 if ! ip link show dev "$iface" >/dev/null 2>&1; then
-    exec ifup "$iface"
+    ifup "$iface" || exit 87
+    exit 0
 fi
-wg addconf "$iface" "$config"
-current=$(wg show "$iface" peers)
-for peer in $current; do
-    keep=false
-    for wanted do
-        if [ "$peer" = "$wanted" ]; then keep=true; break; fi
-    done
-    if [ "$keep" = false ]; then wg set "$iface" peer "$peer" remove; fi
-done
-current=$(wg show "$iface" peers)
+wg addconf "$iface" "$config" || exit 81
+# A shared full-mesh list may include this device. WireGuard silently ignores
+# that entry; use the applied key so inline key rotation is handled correctly.
+own_key=$(wg show "$iface" public-key) || exit 82
+current=$(wg show "$iface" peers) || exit 83
 for peer in $current; do
     keep=false
     for wanted do
         if [ "$peer" = "$wanted" ]; then keep=true; break; fi
     done
     if [ "$keep" = false ]; then
-        echo "dros: unexpected WireGuard peer remains after reconciliation" >&2
-        exit 1
+        wg set "$iface" peer "$peer" remove || exit 84
+    fi
+done
+current=$(wg show "$iface" peers) || exit 83
+for peer in $current; do
+    keep=false
+    for wanted do
+        if [ "$peer" = "$wanted" ]; then keep=true; break; fi
+    done
+    if [ "$keep" = false ]; then
+        exit 85
     fi
 done
 for wanted do
+    if [ "$wanted" = "$own_key" ]; then continue; fi
     found=false
     for peer in $current; do
         if [ "$peer" = "$wanted" ]; then found=true; break; fi
     done
     if [ "$found" = false ]; then
-        echo "dros: configured WireGuard peer missing after reconciliation" >&2
-        exit 1
+        exit 86
     fi
 done
 ''', "dros-wireguard-reconcile", name, config_path, *public_keys]
