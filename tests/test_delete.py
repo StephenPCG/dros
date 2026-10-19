@@ -183,7 +183,7 @@ def test_unsupported_member_prevents_entire_batch(tmp_path):
 def test_xfrm_lifecycle_cannot_be_silently_skipped(tmp_path):
     settings = settings_for(tmp_path)
     write_object(settings, spec={"type": "gre", "xfrmTransport": "vpn"})
-    with pytest.raises(ValueError, match="XfrmTransport lifecycle"):
+    with pytest.raises(ValueError, match="undefined XfrmTransport"):
         delete.build_delete_plan(settings, "iface", runner=no_commands)
 
 

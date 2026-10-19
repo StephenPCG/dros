@@ -933,7 +933,9 @@ class ConfigStore:
         raise ValueError(f"multiple ConfigObjects found for singleton {kind}: {names}")
 
 
-def load_config_objects(settings: DrosSettings) -> ConfigStore:
+def load_config_objects(
+    settings: DrosSettings, *, include_disabled: bool = False
+) -> ConfigStore:
     objects: dict[ConfigObjectKey, ConfigObject] = {}
     for config_dir in settings.paths.config_dirs():
         if not config_dir.exists():
@@ -950,7 +952,7 @@ def load_config_objects(settings: DrosSettings) -> ConfigStore:
             for raw_doc in documents:
                 if raw_doc is None:
                     continue
-                obj = _parse_config_object(raw_doc, yaml_file)
+                obj = _parse_config_object(raw_doc, yaml_file, include_disabled=include_disabled)
                 if obj is None:
                     continue
                 previous = seen_in_dir.get(obj.key)
@@ -960,6 +962,15 @@ def load_config_objects(settings: DrosSettings) -> ConfigStore:
                         f"in same config directory at {previous.source}"
                     )
                 seen_in_dir[obj.key] = obj
+                inherited = objects.get(obj.key)
+                if include_disabled and inherited is not None and (
+                    inherited.metadata.get("disabled") is True
+                    or obj.metadata.get("disabled") is True
+                ):
+                    raise ConfigObjectLoadError(
+                        f"{yaml_file}: disabled overlay for {obj.kind}/{obj.name} conflicts "
+                        f"with {inherited.source}; cannot prove runtime dependencies"
+                    )
                 objects[obj.key] = obj
     return ConfigStore(objects)
 
@@ -972,7 +983,9 @@ def _iter_yaml_files(config_dir: Path) -> list[Path]:
     ]
 
 
-def _parse_config_object(raw_doc: object, source: Path) -> ConfigObject | None:
+def _parse_config_object(
+    raw_doc: object, source: Path, *, include_disabled: bool = False
+) -> ConfigObject | None:
     if not isinstance(raw_doc, dict):
         raise ConfigObjectLoadError(f"ConfigObject document must be a mapping: {source}")
 
@@ -990,7 +1003,7 @@ def _parse_config_object(raw_doc: object, source: Path) -> ConfigObject | None:
     metadata = raw_doc.get("metadata") or {}
     if not isinstance(metadata, dict):
         raise ConfigObjectLoadError(f"ConfigObject metadata must be a mapping: {source}")
-    if metadata.get("disabled") is True:
+    if metadata.get("disabled") is True and not include_disabled:
         return None
 
     raw_name = metadata.get("name", DEFAULT_OBJECT_NAME)

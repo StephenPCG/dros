@@ -87,6 +87,26 @@ spec:
 `gw update` 竞争手动 CLI lock。`activation: system` 会由 `dros-xfrm-<name>.service`
 管理，适合不依附某个接口的 selector。
 
+队列消费时会重新检查关联接口：只有匹配的接口仍存在时才处理 `xfrm-start`；只要还有
+匹配的关联接口存在，就忽略旧的 `xfrm-stop`。这样，卸载后残留的启动事件不会重建
+state/policy，接口重新安装后残留的停止事件也不会破坏它。独立的人工
+`gw start xfrm/<name>` / `gw stop xfrm/<name>` 不受这个 hook 条件限制。
+
+## 随 GRE 卸载
+
+退役 GRE 远端时，保留原始 Interface 和 XfrmTransport YAML，先运行
+`gw delete iface/<name>` 预览，再运行 `gw delete iface/<name> --apply` 执行。
+独占的 `activation: manual`、`selector.proto: gre` transport 会随接口一起卸载。
+命令先确认接口消失，再精确清理对应的双向 policy/state，并验证清理结果；不会全局 flush。
+
+如果还有其他引用（包括禁用的源配置）、其他 transport 共用 policy/state 身份，或其他
+GRE 共用两端 outer IP，命令会报告冲突并拒绝。内核身份、生成文件或历史 systemd unit
+与源配置不匹配时也会拒绝。不要先移除 `xfrmTransport` 再 update，这可能把 GRE 重新
+启为无加密接口。成功卸载后，Interface 和 XfrmTransport 的源 YAML 均由操作者手动删除。
+WireGuard 关联 XFRM 和独立 `gw delete xfrm/<name>` 暂不支持。
+
+完整边界与失败处理见 [卸载资源](../delete.md)。
+
 ## SPI、REQID 与 Key
 
 `spi` 是 ESP 包头里的 Security Parameter Index。对端收到 ESP 包时，会用 `dst + proto esp + spi`

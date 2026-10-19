@@ -45,19 +45,60 @@ also fail explicitly rather than deleting shared files. IP lists are inputs,
 not individually installed ConfigObjects. Edit the relevant shared source and
 use the corresponding `gw update` command.
 
-An interface still attached to `XfrmTransport` is rejected. Detach its XFRM
-association deliberately, apply it, and stop the transport using its existing
-lifecycle before uninstalling the interface. Review other users of the transport.
-An interface with an active nftables listen-rule fragment is also rejected:
+A GRE interface with an exclusive, manual `XfrmTransport` can be uninstalled
+together with its transport; see below. Other interface/XFRM combinations remain
+unsupported. An interface with an active nftables listen-rule fragment is rejected:
 remove `listenPort`/`listen` from source and update the shared firewall through
 the normal interface update first. The uninstall command does not flush a
 shared firewall to remove one interface's rules.
 
+## Retiring a GRE interface with XFRM
+
+Keep both original YAML documents in place and select the interface:
+
+```sh
+gw delete iface/gre-old
+gw delete iface/gre-old --apply
+# After success, manually remove the Interface and its exclusive XfrmTransport.
+```
+
+The preview checks exclusivity and installed ownership before listing the
+interface, transport, generated files and exact scoped removal commands. Live
+XFRM inspection needs sufficient kernel privileges; if a non-root preview is
+denied, run `sudo gw delete iface/gre-old` without `--apply` to preview as root.
+No state changes occur during preview. An offline `sysRoot` only validates source
+and files; it cannot establish runtime exclusivity and skips kernel/service work.
+
+Another object referencing the transport blocks deletion, including disabled
+source objects and other interfaces selected in the same batch. Different
+transport names also block deletion when their policy selectors or ESP state
+identities overlap. Other GRE interfaces using the same outer endpoints share
+the selector even without an explicit `xfrmTransport` field; source and live
+interfaces are checked. Errors identify the conflicting resource. Resolve that
+sharing deliberately before retrying; there is no force option.
+
+Apply rechecks ownership, brings down the GRE using its original installed
+configuration, verifies the interface has disappeared, and deletes only the
+transport's two policies and two ESP states. It verifies their absence before
+removing generated files. A matching, inactive historical DROS systemd unit is
+disabled and removed if present. Stop any active historical unit explicitly
+before retrying: its `gw stop` action needs the same lock as delete. Unexpected
+units, drop-ins or kernel identities block deletion. No global XFRM flush is used,
+and inventory suppresses key material.
+Keep the XFRM association attached throughout this process; an intermediate
+update without it can bring the GRE back without its encryption.
+
+Queued interface hooks check the live associated interfaces: an old start event
+cannot recreate XFRM after the GRE is gone, and an old stop event cannot tear it
+down after the GRE has been recreated. Source YAML is still retained. An explicit
+later `gw update iface/gre-old` or `gw start xfrm/<name>` can reinstall state, so
+remove the two source documents yourself after successful retirement.
+
 ## Dependencies, ownership and failure
 
 Remove or migrate references before deleting an object. DROS checks remaining
-loaded configuration, including Gateway/RouteTable, interface parents/ports,
-DNS listeners, discovery, raw rules and scripts. The conservative identifier
+loaded configuration, including disabled objects: Gateway/RouteTable references,
+interface parents/ports, DNS listeners, discovery, raw rules and scripts. The conservative identifier
 check reports the referring object, source file and field path. A reference in
 a comment string may also need review; arbitrary external scripts and clients
 cannot be inferred. For a kind-wide deletion, dependents are removed before

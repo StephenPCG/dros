@@ -1151,7 +1151,7 @@ spec:
     assert any("ip xfrm policy add dir out src 10.0.0.1/32 dst 203.0.113.1/32 proto udp" in command for command in commands)
 
 
-def test_xfrm_hook_events_start_and_stop_transport(tmp_path: Path) -> None:
+def test_xfrm_hook_start_requires_live_interface_but_stop_cleans_stale_transport(tmp_path: Path) -> None:
     settings = _settings(tmp_path)
     settings.paths.configs.mkdir(parents=True)
     (settings.paths.configs / "xfrm.yaml").write_text(
@@ -1185,10 +1185,8 @@ spec:
     start = process_event(settings, "xfrm-start", iface="office", console=_console(StringIO()))
     stop = process_event(settings, "xfrm-stop", iface="office", console=_console(StringIO()))
 
-    start_commands = [" ".join(action.command or []) for action in start.actions]
     stop_command_lists = [action.command or [] for action in stop.actions]
-    assert any("ip xfrm state add src 10.0.0.1 dst 203.0.113.1" in command for command in start_commands)
-    assert any("ip xfrm policy add dir out src 10.0.0.1/32 dst 203.0.113.1/32" in command for command in start_commands)
+    assert start.actions == []
     assert any(
         command[:4]
         == [

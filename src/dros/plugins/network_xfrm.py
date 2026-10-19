@@ -1,12 +1,18 @@
 from __future__ import annotations
 
 import ipaddress
+import json
 import shlex
 from dataclasses import dataclass
 
 from pydantic import ValidationError
 
-from dros.config_objects import ConfigObject, XfrmTransportConfig
+from dros.config_objects import (
+    ConfigObject,
+    InterfaceConfig,
+    XfrmTransportConfig,
+    load_config_objects,
+)
 from dros.plugins.base import DrosPlugin, UpdateContext
 
 MANAGED_FILES = frozenset({"/etc/systemd/system/dros-xfrm-*.service"})
@@ -82,10 +88,91 @@ def handle_event(context: UpdateContext, event: str, name: str | None = None) ->
     if config.activation != "manual":
         return
     if event == "xfrm-start":
-        if config.enabled:
+        # Events can remain queued while delete/reload holds the apply lock.
+        # Source YAML is intentionally retained by delete, so configuration
+        # alone is not evidence that an interface still needs this transport.
+        if config.enabled and _has_live_interface(context, target):
             start_xfrm(context, target, config)
         return
-    stop_xfrm(context, target, config)
+    # A down event may be processed after its interface was brought up again,
+    # or while a second interface still uses the same transport.
+    if not _has_live_interface(context, target, include_disabled=True):
+        stop_xfrm(context, target, config)
+
+
+def _has_live_interface(
+    context: UpdateContext, target: str, *, include_disabled: bool = False
+) -> bool:
+    associated: list[tuple[ConfigObject, InterfaceConfig]] = []
+    configs = (
+        load_config_objects(context.settings, include_disabled=True)
+        if include_disabled
+        else context.configs
+    )
+    for obj in configs.by_kind("Interface"):
+        reference = obj.spec.get("xfrmTransport", obj.spec.get("xfrm_transport"))
+        if reference != target:
+            continue
+        try:
+            config = context.configs.resolve_object(obj, InterfaceConfig)
+        except ValidationError:
+            # Do not expose keys or other field values from validation errors.
+            raise ValueError(
+                f"XfrmTransport/{target}: cannot verify invalid Interface/{obj.name}"
+            ) from None
+        if config.type not in {"gre", "wireguard"}:
+            raise ValueError(
+                f"XfrmTransport/{target}: unsupported associated Interface/{obj.name}"
+            )
+        associated.append((obj, config))
+    if not associated or not context.executor.is_real_root:
+        return False
+
+    result = context.executor.runner(
+        ["ip", "-json", "-details", "link", "show"],
+        check=False,
+        text=True,
+        capture_output=True,
+        timeout=30,
+    )
+    if result.returncode:
+        raise RuntimeError(f"XfrmTransport/{target}: cannot inspect associated interfaces")
+    try:
+        links = json.loads(result.stdout)
+    except (TypeError, ValueError):
+        raise ValueError(f"XfrmTransport/{target}: invalid interface inventory") from None
+    if not isinstance(links, list) or any(not isinstance(item, dict) for item in links):
+        raise ValueError(f"XfrmTransport/{target}: invalid interface inventory")
+    live = False
+    for obj, config in associated:
+        matches = [item for item in links if item.get("ifname") == obj.name]
+        if not matches:
+            continue
+        if len(matches) != 1:
+            raise ValueError(f"XfrmTransport/{target}: ambiguous Interface/{obj.name}")
+        linkinfo = matches[0].get("linkinfo")
+        if not isinstance(linkinfo, dict) or linkinfo.get("info_kind") != config.type:
+            raise ValueError(
+                f"XfrmTransport/{target}: Interface/{obj.name} runtime type differs"
+            )
+        if config.type == "gre":
+            data = linkinfo.get("info_data")
+            try:
+                matches_endpoints = isinstance(data, dict) and all(
+                    ipaddress.ip_address(data.get(field)) == ipaddress.ip_address(expected)
+                    for field, expected in (
+                        ("local", config.local_public_ip),
+                        ("remote", config.remote_public_ip),
+                    )
+                )
+            except (TypeError, ValueError):
+                matches_endpoints = False
+            if not matches_endpoints:
+                raise ValueError(
+                    f"XfrmTransport/{target}: Interface/{obj.name} runtime endpoints differ"
+                )
+        live = True
+    return live
 
 
 def start_xfrm(context: UpdateContext, name: str, config: XfrmTransportConfig) -> None:
