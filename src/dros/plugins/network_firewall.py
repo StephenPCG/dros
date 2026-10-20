@@ -21,7 +21,7 @@ NAT_TABLE = "dros_nat"
 MSS_CLAMP_SYN_MATCH = "tcp flags & (syn | rst) == syn"
 MSS_CLAMP_COUNTER_NAME = "dros_forward_mss_clamp"
 IP_PROTOCOL_SERVICES = frozenset({"gre", "esp", "ah"})
-LOCAL_OUTPUT_NAT_TYPES = frozenset({"portmap", "ipmap", "raw"})
+LOCAL_OUTPUT_NAT_TYPES = frozenset({"portmap", "ipmap", "redirect", "raw"})
 
 
 def create_plugin() -> DrosPlugin:
@@ -326,7 +326,26 @@ def _render_nat(context: UpdateContext, config: FirewallConfig) -> str:
         kind = str(item["type"])
         family = str(item.get("family", "ip"))
         match = _nat_match(context, item)
-        if kind == "portmap":
+        if kind == "redirect":
+            ports = _port_set(item["dport"])
+            target_ports = _port_set(item.get("toPort", item["dport"]))
+            target = f" to :{item['toPort']}" if item.get("toPort") is not None else ""
+            rule = f"{match} {item['proto']} dport {ports} redirect{target}"
+            lines.append(f"add rule inet {NAT_TABLE} dnat_prerouting {rule}")
+            if _local_output_enabled(item):
+                lines.append(f"add rule inet {NAT_TABLE} dnat_output {rule}")
+            # INPUT sees the translated destination. Match the original tuple as
+            # well, so this does not open the local port to direct connections.
+            allow = [_nat_match(context, item, include_destination=False), "ct status dnat"]
+            for field, operator in (("daddr", ""), ("daddrNot", "!= ")):
+                if item.get(field):
+                    allow.append(f"ct original {family} daddr {operator}{item[field]}")
+            allow.extend([
+                f"ct original proto-dst {ports}",
+                f"{item['proto']} dport {target_ports} accept",
+            ])
+            lines.append(f"add rule inet {FILTER_TABLE} input_auto {' '.join(allow)}")
+        elif kind == "portmap":
             forward_match = _nat_match(context, item, include_destination=False)
             to_port = f":{item['toPort']}" if item.get("toPort") is not None else ""
             dnat_rule = (
@@ -481,13 +500,13 @@ def _validate_nat_rules(
 ) -> None:
     for index, item in enumerate(rules):
         kind = item.get("type")
-        if kind not in {"portmap", "ipmap", "snat", "masquerade", "raw"}:
+        if kind not in {"portmap", "ipmap", "redirect", "snat", "masquerade", "raw"}:
             errors.append(f"Firewall/{obj.name}: spec.natRules[{index}].type is invalid")
         if _local_output_enabled(item):
             if kind not in LOCAL_OUTPUT_NAT_TYPES:
                 errors.append(
                     f"Firewall/{obj.name}: spec.natRules[{index}].localOutput "
-                    "is only supported for portmap, ipmap, and raw"
+                    "is only supported for portmap, ipmap, redirect, and raw"
                 )
             if item.get("iif"):
                 errors.append(
@@ -499,6 +518,26 @@ def _validate_nat_rules(
                 f"Firewall/{obj.name}: spec.natRules[{index}].hairpin "
                 "is only supported for portmap and ipmap"
             )
+        if kind == "redirect":
+            path = f"Firewall/{obj.name}: spec.natRules[{index}]"
+            if item.get("proto") not in {"tcp", "udp"}:
+                errors.append(f"{path}.proto must be tcp or udp for redirect")
+            if item.get("dport") is None:
+                errors.append(f"{path}.dport is required for redirect")
+            family = item.get("family", "ip")
+            if family not in {"ip", "ip6", "inet"}:
+                errors.append(f"{path}.family must be ip, ip6, or inet for redirect")
+            if family == "inet" and any(item.get(key) for key in ("saddr", "daddr", "daddrNot")):
+                errors.append(f"{path}: redirect address matches require family ip or ip6")
+            for field in ("to", "oif", "rawRule", "forwardAllowRule"):
+                if field in item:
+                    errors.append(f"{path}.{field} is not supported for redirect")
+            if "toPort" in item and (
+                isinstance(item["toPort"], bool)
+                or not str(item["toPort"]).isdigit()
+                or not 1 <= int(item["toPort"]) <= 65535
+            ):
+                errors.append(f"{path}.toPort must be a single port between 1 and 65535")
         if item.get("rawRule"):
             _validate_raw_devgroups(
                 obj,

@@ -1053,3 +1053,79 @@ spec:
     run_update(settings, target="ip-list-updater/system", console=_console(StringIO()))
 
     assert not (settings.sys_root / "etc/cron.d/dros-ip-list-updater").exists()
+
+
+@pytest.mark.parametrize(
+    ("extra", "nat", "allow"),
+    [
+        ({}, "redirect", "tcp dport { 80, 443 } accept"),
+        ({"toPort": 8080}, "redirect to :8080", "tcp dport 8080 accept"),
+    ],
+)
+def test_redirect_preserves_original_destination_scope(tmp_path, extra, nat, allow):
+    import yaml
+
+    settings = _settings(tmp_path)
+    settings.paths.configs.mkdir(parents=True)
+    rule = dict(type="redirect", daddr="10.6.6.6", proto="tcp", dport=[80, 443],
+                localOutput=True, saddr="10.0.0.0/8", **extra)
+    (settings.paths.configs / "firewall.yaml").write_text(yaml.safe_dump(
+        {"kind": "Firewall", "metadata": {"name": "main"}, "spec": {"natRules": [rule]}}
+    ))
+    run_update(settings, target="firewall/main", console=_console(StringIO()))
+    nft = (settings.sys_root / "etc/dros/nftables.d/10-firewall.nft").read_text()
+    for chain in ("dnat_prerouting", "dnat_output"):
+        assert (f"add rule inet dros_nat {chain} meta nfproto ipv4 ip saddr 10.0.0.0/8 "
+                f"ip daddr 10.6.6.6 tcp dport {{ 80, 443 }} {nat}") in nft
+    assert ("add rule inet dros_filter input_auto meta nfproto ipv4 ip saddr 10.0.0.0/8 "
+            "ct status dnat ct original ip daddr 10.6.6.6 "
+            f"ct original proto-dst {{ 80, 443 }} {allow}") in nft
+    assert "add rule inet dros_filter portmap_forward" not in nft
+
+
+@pytest.mark.parametrize("family,address", [("ip", "10.6.6.6"), ("ip6", "fd00::6")])
+def test_redirect_ingress_udp_scope(tmp_path, family, address):
+    import yaml
+
+    settings = _settings(tmp_path)
+    settings.paths.configs.mkdir(parents=True)
+    rule = dict(type="redirect", family=family, iif="interface/br0", daddrNot=address,
+                proto="udp", dport=53, toPort=5353)
+    (settings.paths.configs / "firewall.yaml").write_text(yaml.safe_dump(
+        {"kind": "Firewall", "spec": {"natRules": [rule]}}
+    ))
+    run_update(settings, target="firewall", console=_console(StringIO()))
+    nft = (settings.sys_root / "etc/dros/nftables.d/10-firewall.nft").read_text()
+    assert f'{family} daddr != {address} udp dport 53 redirect to :5353' in nft
+    assert (f'iifname "br0" ct status dnat ct original {family} daddr != {address} '
+            'ct original proto-dst 53 udp dport 5353 accept') in nft
+    assert "add rule inet dros_nat dnat_output" not in nft
+
+
+@pytest.mark.parametrize("extra,error", [
+    ({"proto": "icmp"}, ".proto must be tcp or udp"),
+    ({"dport": None}, ".dport is required"),
+    ({"to": "127.0.0.1"}, ".to is not supported"),
+    ({"oif": "eth0"}, ".oif is not supported"),
+    ({"rawRule": "redirect"}, ".rawRule is not supported"),
+    ({"forwardAllowRule": "accept"}, ".forwardAllowRule is not supported"),
+    ({"hairpin": {"sourceNet": "10.0.0.0/8"}}, ".hairpin is only supported"),
+    ({"iif": "eth0", "localOutput": True}, ".localOutput cannot be used with iif"),
+    ({"family": "inet", "daddr": "10.6.6.6"}, "address matches require family ip or ip6"),
+    ({"family": "invalid"}, ".family must be ip, ip6, or inet"),
+    ({"toPort": [80, 443]}, ".toPort must be a single port"),
+    ({"toPort": 0}, ".toPort must be a single port"),
+    ({"toPort": 65536}, ".toPort must be a single port"),
+])
+def test_redirect_rejects_incompatible_fields(tmp_path, extra, error):
+    import yaml
+
+    settings = _settings(tmp_path)
+    settings.paths.configs.mkdir(parents=True)
+    rule = {"type": "redirect", "proto": "tcp", "dport": 80, **extra}
+    (settings.paths.configs / "firewall.yaml").write_text(yaml.safe_dump(
+        {"kind": "Firewall", "spec": {"natRules": [rule]}}
+    ))
+    with pytest.raises(UpdateValidationError) as exc:
+        run_update(settings, target="firewall", console=_console(StringIO()))
+    assert error in "\n".join(exc.value.errors)

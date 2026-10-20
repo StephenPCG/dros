@@ -169,7 +169,7 @@ raw rule 中的 `iifgroup devgroup/<name>` 和 `oifgroup devgroup/<name>` 会解
 
 默认值：`[]`。
 
-支持的 `type`：`portmap`、`ipmap`、`snat`、`masquerade`、`raw`。
+支持的 `type`：`portmap`、`ipmap`、`redirect`、`snat`、`masquerade`、`raw`。
 
 常用字段：
 
@@ -181,9 +181,9 @@ raw rule 中的 `iifgroup devgroup/<name>` 和 `oifgroup devgroup/<name>` 会解
   数组，例如 `dport: [80, 443]`，会渲染为 nft 端口集合
   `{ 80, 443 }`
 - `to`：DNAT/SNAT 目标
-- `toPort`：DNAT 目标端口
+- `toPort`：DNAT 目标端口；`redirect` 中仅支持一个目标端口，省略则保持原端口
 - `localOutput`：可选，默认 `false`。仅适用于 `portmap`、`ipmap` 和
-  `raw`。设置为 `true` 后，DNAT 规则除了写入 `dnat_prerouting`，还会写入
+  `redirect`、`raw`。设置为 `true` 后，DNAT 规则除了写入 `dnat_prerouting`，还会写入
   `dnat_output`，让网关自身发出的包也能命中该 DNAT 规则。该字段不能和
   `iif` 同用，因为本机发出的包没有入接口。
 - `hairpin`：可选。为 `portmap` 或 `ipmap` 生成 hairpin SNAT 规则
@@ -196,13 +196,53 @@ raw rule 中的 `iifgroup devgroup/<name>` 和 `oifgroup devgroup/<name>` 会解
 `ipmap` 也支持同样的 `hairpin` 配置，但因为它是不按端口区分的 IP 映射，
 生成的 hairpin SNAT 规则只匹配源网段和 DNAT 后的目标地址，不匹配协议/端口。
 
-默认情况下，`portmap`、`ipmap` 和 `raw` 只写入 `dnat_prerouting`，因此
+默认情况下，`portmap`、`ipmap`、`redirect` 和 `raw` 只写入 `dnat_prerouting`，因此
 只覆盖进入网关后的 DNAT 流量。网关本机进程主动发出的包会走 NAT
 `output` hook，需要在对应规则上设置 `localOutput: true` 才会额外生成
 `dnat_output` 规则。`snat` 和 `masquerade` 写入 `postrouting`，只要匹配条件
 成立，本身可以覆盖本机发出的包。
 
-`hairpin` 字段：
+#### 转发给网关本机：`redirect`
+
+例如将虚拟 IP `10.6.6.6` 的 TCP 80、443 交给网关本机的 nginx
+（包括使用 host network 的容器），将以下规则合并到现有 Firewall：
+
+```yaml
+spec:
+  natRules:
+    - type: redirect
+      daddr: 10.6.6.6
+      proto: tcp
+      dport: [80, 443]
+      localOutput: true
+```
+
+`proto`（tcp/udp）和 `dport` 必填。省略 `toPort` 时保持原端口；
+设置 `toPort: 8080` 则把匹配的端口全部转到本机 8080，不表示逐项端口映射。
+`family` 默认 `ip`，也支持 `ip6`；`inet` 仅支持不带地址匹配的规则。
+
+DROS 自动生成 `input_auto` 放行规则，匹配 `ct status dnat`、原始目标地址/
+端口和转换后的目标端口，并保留 `saddr`、`iif` 限制。
+因此无需单独添加 input 放行，也不会仅因这条规则就允许直接访问本机相同端口。
+该规则不生成 forward 放行或 SNAT。它按连接条件放行，并不为每条 NAT 规则分配
+唯一标记；其他 DNAT 若匹配同样的原始条件和本机目标端口，也会被放行。
+与其他自动 input 规则一样，它先于 `firewallRules` 中的 input 规则执行；
+需要限制来源时，应在 redirect 本身配置 `saddr` 或 `iif`。
+
+注意：
+
+- `10.6.6.6` 不必绑定到网关，但客户端路由必须将包送到网关。如果客户端将其视为
+  直连地址，会直接 ARP，需要另外配置 `/32` 路由或地址/ARP 响应；DROS 不自动处理这些。
+- 入站 redirect 使用入接口的本机地址，本机 output redirect 使用 loopback 地址。
+  nginx 应监听 `0.0.0.0`（IPv6 时还需相应监听），仅监听 `127.0.0.1` 无法承接普通入站
+  redirect；入接口也需要有相应地址。
+- `localOutput` 默认 `false`，启用后网关自身也能访问虚拟 IP；不能同时指定 `iif`。
+- 不支持 `to`、`oif`、`hairpin`、`rawRule`、`forwardAllowRule`。
+  需要自定义 nft 行为时使用 `type: raw` 并自行配置放行。
+- TCP 443 不包括 HTTP/3 的 UDP 443，需要时另外增加 UDP 规则并配置服务监听。
+- NAT 只在连接建立时决定映射，修改规则后应使用新连接验证；已有 conntrack 连接可能继续使用旧映射。
+
+#### `hairpin` 字段
 
 - `sourceNet`：必填。需要做 hairpin SNAT 的源网段，例如 `10.20.0.0/16`。
   DROS 不会从 DNAT 地址自动推导这个网段。
