@@ -642,14 +642,16 @@ def delete_command(target: str, *, apply: bool = False) -> None:
     """Preview uninstalling kind[/name]; --apply executes it, retaining source YAML."""
     try:
         settings = _load_cli_settings()
-        if apply:
+        if apply or settings.sys_root == Path("/"):
             _ensure_bootstrap_privileges(settings)
+        if apply:
             with _manual_cli_lock(settings):
                 plan = build_delete_plan(settings, target)
                 print_delete_plan(plan, console)
                 apply_delete_plan(settings, plan, console=console)
         else:
-            # No sudo, lock, logs, temporary directories or mutating commands in preview.
+            # Live inspection may need sudo; preview still never locks or mutates.
+            # Offline preview never elevates, even when sysRoot is not writable.
             print_delete_plan(build_delete_plan(settings, target), console)
             console.print("Preview only; use --apply to execute this uninstall.", markup=False)
     except (KeyError, OSError, RuntimeError, ValueError, subprocess.SubprocessError) as exc:

@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 import subprocess
+import sys
+from contextlib import contextmanager
 from pathlib import Path
 
 import pytest
@@ -49,13 +51,17 @@ def no_commands(*args, **kwargs):
     pytest.fail("offline/preview invoked an unexpected command")
 
 
-def test_cli_preview_is_read_only_including_logs_locks_and_sudo(tmp_path, monkeypatch, capsys):
+@pytest.mark.parametrize("writable", [False, True])
+def test_offline_cli_preview_never_elevates_or_writes(tmp_path, monkeypatch, capsys, writable):
     settings = settings_for(tmp_path)
     source = write_object(settings)
     run_update(settings, target="iface/gre-old", verbose=0)
     before = tree(tmp_path)
     monkeypatch.setattr(cli, "_load_cli_settings", lambda: settings)
     monkeypatch.setattr(cli, "_try_load_cli_settings_for_logging", no_commands)
+    monkeypatch.setattr(cli.os, "geteuid", lambda: 1000)
+    monkeypatch.setattr(cli, "path_writable_for_current_user", lambda path: writable)
+    monkeypatch.setattr(cli, "reexec_with_sudo", no_commands)
     monkeypatch.setattr(cli, "_ensure_bootstrap_privileges", no_commands)
     monkeypatch.setattr(cli, "_manual_cli_lock", no_commands)
     assert cli.main(["delete", "iface/gre-old"]) == 0
@@ -65,6 +71,111 @@ def test_cli_preview_is_read_only_including_logs_locks_and_sudo(tmp_path, monkey
     assert "ip link delete dev gre-old" in output
     assert "delete file:" in output and "Preview only" in output
     assert source.read_bytes() == before[str(source.relative_to(tmp_path))]
+
+
+@pytest.mark.parametrize("command", ["delete", "remove"])
+@pytest.mark.parametrize("euid", [0, 1000])
+@pytest.mark.parametrize("equals_settings", [False, True])
+@pytest.mark.parametrize("explicit_preview", [False, True])
+def test_live_cli_preview_preserves_arguments_and_remains_read_only_after_sudo(
+    tmp_path, monkeypatch, capsys, command, euid, equals_settings, explicit_preview
+):
+    offline = settings_for(tmp_path)
+    write_object(offline)
+    settings = offline.model_copy(update={"sys_root": Path("/")})
+    settings_path = str(tmp_path / "settings with spaces.yaml")
+    args = (
+        ([f"--settings={settings_path}"] if equals_settings else ["--settings", settings_path])
+        + [command, "iface/gre-old"]
+        + (["--no-apply"] if explicit_preview else [])
+    )
+    calls = []
+    planned = []
+    before = tree(tmp_path)
+    monkeypatch.setattr(cli, "_load_cli_settings", lambda: settings)
+    monkeypatch.setattr(cli, "_try_load_cli_settings_for_logging", no_commands)
+    monkeypatch.setattr(cli, "_manual_cli_lock", no_commands)
+    monkeypatch.setattr(cli, "apply_delete_plan", no_commands)
+    monkeypatch.setattr(cli.os, "geteuid", lambda: euid)
+
+    def reexec(command_args):
+        calls.append(command_args)
+        assert command_args == [sys.executable, "-m", "dros.cli.main", *args]
+        assert not planned  # Elevation must happen before privileged inspection.
+        monkeypatch.setattr(cli.os, "geteuid", lambda: 0)
+        # Exercise the root entrypoint too, without invoking actual sudo.
+        raise SystemExit(cli.main(command_args[3:]))
+
+    def plan(actual_settings, target):
+        assert cli.os.geteuid() == 0
+        assert actual_settings is settings and target == "iface/gre-old"
+        assert cli._current_settings_path == settings_path
+        planned.append(target)
+        return delete.DeletePlan((), offline=False)
+
+    monkeypatch.setattr(cli, "reexec_with_sudo", reexec)
+    monkeypatch.setattr(cli, "build_delete_plan", plan)
+    assert cli.main(args) == 0
+    assert len(calls) == (0 if euid == 0 else 1)
+    assert planned == ["iface/gre-old"]
+    assert "Preview only" in capsys.readouterr().out
+    assert tree(tmp_path) == before
+
+
+@pytest.mark.parametrize(
+    "failure", [RuntimeError("sudo unavailable"), PermissionError("denied"), SystemExit(1)]
+)
+def test_live_preview_sudo_failure_stops_before_inspection_or_mutation(
+    tmp_path, monkeypatch, failure
+):
+    settings = settings_for(tmp_path).model_copy(update={"sys_root": Path("/")})
+    before = tree(tmp_path)
+    monkeypatch.setattr(cli, "_load_cli_settings", lambda: settings)
+    monkeypatch.setattr(cli.os, "geteuid", lambda: 1000)
+    for name in (
+        "_try_load_cli_settings_for_logging",
+        "_manual_cli_lock",
+        "build_delete_plan",
+        "apply_delete_plan",
+    ):
+        monkeypatch.setattr(cli, name, no_commands)
+
+    def fail(command):
+        raise failure
+
+    monkeypatch.setattr(cli, "reexec_with_sudo", fail)
+    assert cli.main(["delete", "iface/gre-old"]) == 1
+    assert tree(tmp_path) == before
+
+
+@pytest.mark.parametrize("live", [False, True])
+def test_cli_apply_keeps_privilege_and_lock_before_execution(tmp_path, monkeypatch, live):
+    settings = settings_for(tmp_path)
+    if live:
+        settings = settings.model_copy(update={"sys_root": Path("/")})
+    calls = []
+    plan = delete.DeletePlan((), offline=not live)
+    monkeypatch.setattr(cli, "_load_cli_settings", lambda: settings)
+    monkeypatch.setattr(cli, "_try_load_cli_settings_for_logging", no_commands)
+    monkeypatch.setattr(
+        cli, "_ensure_bootstrap_privileges", lambda settings: calls.append("privileges")
+    )
+
+    @contextmanager
+    def lock(settings):
+        calls.append("lock")
+        yield
+        calls.append("unlock")
+
+    def build(settings, target):
+        calls.append("plan")
+        return plan
+
+    monkeypatch.setattr(cli, "_manual_cli_lock", lock)
+    monkeypatch.setattr(cli, "build_delete_plan", build)
+    monkeypatch.setattr(cli, "apply_delete_plan", lambda *args, **kwargs: calls.append("apply"))
+    assert cli.main(["delete", "iface/gre-old", "--apply"]) == 0
+    assert calls == ["privileges", "lock", "plan", "apply", "unlock"]
 
 
 def test_offline_apply_removes_only_owned_files_and_is_repeatable(tmp_path):

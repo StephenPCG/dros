@@ -17,9 +17,14 @@ An empty target, broad kind groups such as `route`, an unknown resource, and an
 unsupported resource type fail explicitly. Prefer `kind/name` for network work.
 
 The default is a read-only plan: it lists files, commands, source documents and
-conditional actions. It does not acquire a lock, elevate privileges, create
-temporary directories, or write invocation logs. On a live system it reads
-kernel interface details with `ip -json -details link show`. `--apply` obtains
+conditional actions. On a live system (`sysRoot: /`), a non-root invocation
+automatically re-executes through sudo, just like `gw update`, preserving all
+arguments. It never adds `--apply`: elevation only enables privileged inspection.
+Preview does not acquire an apply lock, create temporary directories, or write
+DROS invocation logs; sudo may record its own authentication/audit events.
+Offline preview never elevates, even if the offline root is not writable.
+On a live system the plan reads kernel interface details with
+`ip -json -details link show`. `--apply` obtains
 the usual gateway apply lock, builds a fresh plan, validates the entire batch,
 and then executes it. With a non-root `sysRoot`, only files under that root are
 removed; kernel commands are skipped and this limitation is printed.
@@ -64,9 +69,10 @@ gw delete iface/gre-old --apply
 
 The preview checks exclusivity and installed ownership before listing the
 interface, transport, generated files and exact scoped removal commands. Live
-XFRM inspection needs sufficient kernel privileges; if a non-root preview is
-denied, run `sudo gw delete iface/gre-old` without `--apply` to preview as root.
-No state changes occur during preview. An offline `sysRoot` only validates source
+XFRM inspection needs sufficient kernel privileges, so `gw delete iface/gre-old`
+automatically requests sudo when needed. Explicit `sudo` also works. If elevation
+fails, the command stops without continuing to inspection or uninstall.
+No managed resource changes occur during preview. An offline `sysRoot` only validates source
 and files; it cannot establish runtime exclusivity and skips kernel/service work.
 
 Another object referencing the transport blocks deletion, including disabled
