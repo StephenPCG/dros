@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import ipaddress
 import json
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -260,6 +261,14 @@ def _text_inventory(text: str, kind: str) -> list[dict[str, Any]]:
                 section.startswith("replay-window ") or section.startswith("anti-replay context: ")
             ):
                 # Replay counters do not affect the deletion identity.
+                continue
+            elif kind == "state" and re.fullmatch(
+                r"lastused (?:[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2}|-|invalid-time)",
+                section,
+            ):
+                # iproute2's XFRMA_LASTUSED/strxf_time output is usage metadata,
+                # not ownership. Match the whole section to keep unknown fields
+                # and trailing scope attributes on the fail-closed path.
                 continue
             elif kind == "state" and section.startswith("aead "):
                 # No algorithm/key text is retained in the inventory or plan.

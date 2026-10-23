@@ -55,6 +55,41 @@ def test_actual_debian12_oneline_output(kind, text, matcher):
     assert "Keys" not in repr(items) and "aead" not in repr(items)
 
 
+@pytest.mark.parametrize("timestamp", ["2026-10-23 16:33:44", "-", "invalid-time"])
+def test_used_state_lastused_metadata_does_not_change_ownership(timestamp):
+    # A used SA includes this section even without -s. The original isolated
+    # fixture had no traffic and therefore missed it. Addresses remain synthetic.
+    used = STATE.replace("\\\tanti-replay", f"\\\tlastused {timestamp}\\\tanti-replay")
+    items = inventory(runner_for(used), "state")
+    assert matching_state(items, TARGET)
+    assert items == inventory(runner_for(STATE), "state")
+
+
+@pytest.mark.parametrize(
+    "section",
+    [
+        "lastused",
+        "lastused unknown",
+        "lastused (ERROR truncated)",
+        "lastused 2026-10-23 16:33:44 mark 0x1/0xffffffff",
+        "lastused 2026-10-23 16:33:44\\\tmark 0x1/0xffffffff",
+        "lastused 2026-10-23 16:33:44\\\tif_id 2",
+        "lastused 2026-10-23 16:33:44\\\tunknown-metadata x",
+    ],
+)
+def test_lastused_does_not_hide_unrecognized_or_scoped_metadata(section):
+    used = STATE.replace("\\\tanti-replay", f"\\\t{section}\\\tanti-replay")
+    with pytest.raises(ValueError, match="ownership"):
+        matching_state(inventory(runner_for(used), "state"), TARGET)
+
+
+def test_used_state_still_requires_matching_reqid():
+    used = STATE.replace("\\\tanti-replay", "\\\tlastused 2026-10-23 16:33:44\\\tanti-replay")
+    used = used.replace("reqid 101", "reqid 999")
+    with pytest.raises(ValueError, match="ownership"):
+        matching_state(inventory(runner_for(used), "state"), TARGET)
+
+
 @pytest.mark.parametrize("kind", ["state", "policy"])
 def test_empty_inventory_is_valid(kind):
     assert inventory(runner_for(""), kind) == []
