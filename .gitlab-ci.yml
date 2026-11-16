@@ -1,0 +1,8 @@
+test:
+  image: python:3.13-bookworm
+  tags: [docker, macmini-2018]
+  script:
+    - python -m pip install uv==0.11.2
+    - uv sync --locked
+    - uv run --locked python -m compileall -q src/dros
+    - uv run --locked pytest -q
