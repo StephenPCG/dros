@@ -979,7 +979,9 @@ def _iter_yaml_files(config_dir: Path) -> list[Path]:
     return [
         path
         for path in config_dir.rglob("*")
-        if path.is_file() and path.suffix.lower() in {".yaml", ".yml"}
+        if not path.name.startswith(".")
+        and path.suffix.lower() in {".yaml", ".yml"}
+        and path.is_file()
     ]
 
 

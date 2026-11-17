@@ -58,6 +58,19 @@ def test_config_object_defaults_are_code_owned_when_object_is_missing(tmp_path: 
     assert store.resolve("SystemMirrorConfig", SystemMirrorConfig) == SystemMirrorConfig()
 
 
+def test_config_scan_skips_dot_prefixed_yaml_filenames(tmp_path: Path) -> None:
+    nested = tmp_path / "nested"
+    nested.mkdir()
+    (tmp_path / ".gitlab-ci.yml").write_text("validate: {}\n", encoding="utf-8")
+    (nested / ".scratch.yaml").write_text("invalid: [\n", encoding="utf-8")
+    config = nested / "lan.yml"
+    config.write_text("kind: DevGroup\nmetadata: {name: lan}\nspec: {id: 2}\n", encoding="utf-8")
+
+    store = load_config_objects(DrosSettings(paths=DrosPaths(configs=tmp_path)))
+
+    assert store.require("DevGroup", "lan").source == config
+
+
 def test_single_yaml_file_can_contain_multiple_config_object_documents(tmp_path: Path) -> None:
     configs = tmp_path / "configs"
     configs.mkdir()
